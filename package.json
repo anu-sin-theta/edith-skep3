@@ -1,13 +1,15 @@
 {
   "name": "edith-sentinel",
-  "version": "1.0.0",
-  "main": "index.js",
+  "version": "2.1.0",
+  "main": "dist/index.js",
   "bin": {
     "edith": "./dist/index.js"
   },
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
   },
   "keywords": [],
   "author": "",
