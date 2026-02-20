@@ -374,18 +374,54 @@ async function fetchAvailableModels(provider: Provider, apiKey: string): Promise
     if (!provider.supportsModelList) return provider.fallbackModels;
 
     try {
-        const client = buildClient(provider, apiKey);
-        const list = await client.models.list();
+        let ids: string[] = [];
 
-        const ids = list.data.map(m => m.id).filter(id => {
-            if (provider.name === 'gemini') return id.includes('gemini') && !id.includes('embedding') && !id.includes('vision');
-            if (provider.name === 'openai') return /^(gpt-|o1|o3|chatgpt)/.test(id);
-            if (provider.name === 'mistral') return !id.includes('embed');
-            return true;
-        });
+        if (provider.name === 'gemini') {
+            // Gemini has its own native models list API — more reliable than OpenAI compat layer
+            const res = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=50`,
+                { signal: AbortSignal.timeout(8000) }
+            );
+            if (!res.ok) throw new Error(`Gemini API ${res.status}: ${await res.text()}`);
+            const data: any = await res.json();
+            ids = (data.models || [])
+                .map((m: any) => (m.name as string).replace('models/', ''))
+                .filter((id: string) =>
+                    id.startsWith('gemini') &&
+                    !id.includes('embedding') &&
+                    !id.includes('aqa') &&
+                    !id.includes('vision')
+                );
+
+        } else if (provider.name === 'openai') {
+            const res = await fetch('https://api.openai.com/v1/models', {
+                headers: { Authorization: `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(8000),
+            });
+            if (!res.ok) throw new Error(`OpenAI API ${res.status}`);
+            const data: any = await res.json();
+            ids = (data.data || [])
+                .map((m: any) => m.id as string)
+                .filter((id: string) => /^(gpt-|o1|o3|chatgpt)/.test(id));
+
+        } else if (provider.name === 'mistral') {
+            const res = await fetch('https://api.mistral.ai/v1/models', {
+                headers: { Authorization: `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(8000),
+            });
+            if (!res.ok) throw new Error(`Mistral API ${res.status}`);
+            const data: any = await res.json();
+            ids = (data.data || [])
+                .map((m: any) => m.id as string)
+                .filter((id: string) => !id.includes('embed'));
+        }
 
         return ids.sort().length > 0 ? ids.sort() : provider.fallbackModels;
-    } catch {
+
+    } catch (err: any) {
+        // Surface the real error so the user knows what went wrong
+        process.stderr.write(`  [warn] Could not fetch live model list: ${err.message}\n`);
+        process.stderr.write(`  [info] Using known models for ${provider.label}\n\n`);
         return provider.fallbackModels;
     }
 }
