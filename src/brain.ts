@@ -448,6 +448,14 @@ export async function runBrainFlow(chalk: any): Promise<BrainConfig & { apiKey: 
             console.log(chalk.gray(`    [---]  ${p.label.padEnd(20)} ${chalk.dim(p.envKey + ' not set')}  `));
         }
     });
+
+    const explorerKey = process.env.ETHERSCAN_API_KEY;
+    if (explorerKey) {
+        const masked = explorerKey.slice(0, 6) + '*'.repeat(Math.max(0, Math.min(12, explorerKey.length - 10))) + explorerKey.slice(-4);
+        console.log(chalk.green(`    [set]  Etherscan            ETHERSCAN_API_KEY = ${chalk.gray(masked)}`));
+    } else {
+        console.log(chalk.gray(`    [---]  Etherscan            ${chalk.dim('ETHERSCAN_API_KEY not set')}`));
+    }
     console.log('');
 
     if (detected.length === 0) {

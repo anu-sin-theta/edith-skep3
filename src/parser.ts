@@ -145,7 +145,7 @@ export class TransactionParser {
         return warnings;
     }
 
-    formatForAI(parsed: Partial<ParsedTransaction>, trace: ParsedTrace | null): string {
+    formatForAI(parsed: Partial<ParsedTransaction>, trace: ParsedTrace | null, contractCode?: string): string {
         const logSummary = (parsed.logs || []).map(l => {
             let str = `  - Event: ${l.eventName} on ${l.address}`;
             if (l.decoded) {
@@ -161,6 +161,13 @@ export class TransactionParser {
             numSubCalls: (trace.calls || []).length,
         }, null, 2) : 'No trace available.';
 
+        let codeSection = '';
+        if (contractCode) {
+            // Include a safe snippet of the code (AI has token limits)
+            const cleanCode = contractCode.slice(0, 5000);
+            codeSection = `\n=== TARGET CONTRACT CODE (Logic) ===\n${cleanCode}\n`;
+        }
+
         return `
 === TRANSACTION SIMULATION REPORT ===
 Hash: ${parsed.hash}
@@ -169,7 +176,7 @@ To:   ${parsed.to}
 Value: ${parsed.value}
 Status: ${parsed.status?.toUpperCase()}
 Gas Used: ${parsed.gasUsed}
-
+${codeSection}
 === EMITTED EVENTS (Logs) ===
 ${logSummary || 'No events emitted.'}
 

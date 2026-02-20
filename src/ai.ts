@@ -11,39 +11,47 @@ export interface AuditResult {
     engine: string;   // what model/provider was used
 }
 
-// ─── Shared Security Prompt ────────────────────────────────────────────────────
-
 function buildPrompt(simulationReport: string): string {
-    return `You are EDITH, an expert Web3 security auditor specializing in smart contract exploits, phishing transactions, and token drainers.
-
-You are analyzing a SIMULATED transaction that was run in a sandboxed local Ethereum fork BEFORE the user signs it.
+    return `Analyze this simulated Ethereum transaction:
 
 ${simulationReport}
 
-Your task:
-1. Analyze the emitted events and call trace for malicious patterns.
-2. Look specifically for:
-   - INFINITE token approvals (drainer pattern)
-   - DELEGATECALL to unknown/unverified contracts
-   - Tokens being transferred OUT of the user's wallet unexpectedly
-   - SELFDESTRUCT calls
-   - Reentrancy patterns (repeated calls to same function)
-   - Contract addresses that are proxies to unknown implementations
+TASKS:
+1. Identify malicious patterns (Infinite approvals, drainers, suspicious calls).
+2. If SUCCESS with 21,000 gas and NO events/calls, it's a plain ETH transfer (SAFE).
+3. "fallback()" with no data/value is a "ping" (SAFE).
 
-Give your response in EXACTLY this format:
+FORMAT:
 VERDICT: [SAFE | RISKY | CRITICAL]
-REASON: [2-4 sentences explaining your reasoning clearly for a non-technical user]
-TECHNICAL_DETAIL: [1-2 sentences with technical specifics for advanced users]`;
+REASON: [Short, clear explanation for a user]
+TECHNICAL_DETAIL: [One technical sentence]`;
 }
 
 function parseVerdict(raw: string, engine: string): AuditResult {
-    const verdictMatch = raw.match(/VERDICT:\s*(SAFE|RISKY|CRITICAL)/i);
-    const reasonMatch = raw.match(/REASON:\s*(.+?)(?=TECHNICAL_DETAIL:|$)/si);
+    // Robust regex to handle markdown bolding and variations (**VERDICT:**, VERDICT:, etc.)
+    const verdictMatch = raw.match(/(?:\*\*)?VERDICT(?:\*\*)?:?\s*(SAFE|RISKY|CRITICAL)/i);
+    const reasonMatch = raw.match(/(?:\*\*)?REASON(?:\*\*)?:?\s*([^]*?)(?=(?:\*\*)?TECHNICAL_DETAIL:?|$)/si);
 
-    const verdict = (verdictMatch?.[1]?.toUpperCase() as Verdict) || 'RISKY';
-    const reasoning = reasonMatch?.[1]?.trim() || raw.slice(0, 400);
+    let verdict = (verdictMatch?.[1]?.toUpperCase() as Verdict) || 'RISKY';
+    let reasoning = reasonMatch?.[1]?.trim() || '';
 
-    return { verdict, reasoning, raw, engine };
+    // If regex failed to find structured reason, try to extract the main block of text
+    if (!reasoning && raw) {
+        reasoning = raw
+            .replace(/(?:\*\*)?VERDICT(?:\*\*)?:\s*(SAFE|RISKY|CRITICAL)/gi, '')
+            .replace(/(?:\*\*)?TECHNICAL_DETAIL(?:\*\*)?:?\s*[^]*/gi, '')
+            .trim();
+    }
+
+    // Cap reasoning length
+    if (reasoning.length > 800) reasoning = reasoning.slice(0, 797) + '...';
+
+    return {
+        verdict,
+        reasoning: reasoning || 'No reasoning provided by AI. Review raw logs.',
+        raw,
+        engine
+    };
 }
 
 // ─── Ollama Auditor (local) ────────────────────────────────────────────────────

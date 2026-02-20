@@ -18,6 +18,7 @@ import {
 import { type Hex } from 'viem';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
+import { ContractExplorer } from './explorer.js';
 
 const program = new Command();
 
@@ -47,9 +48,8 @@ function printVerdict(verdict: Verdict, reasoning: string, warnings: string[], e
         CRITICAL: '🚨',
     };
 
-    console.log('\n' + chalk.gray('─'.repeat(56)));
-
     if (warnings.length > 0) {
+        console.log('\n' + chalk.gray('─'.repeat(56)));
         console.log(chalk.yellow.bold('\n[PARSER WARNINGS]'));
         warnings.forEach(w => console.log(chalk.yellow(w)));
     }
@@ -268,6 +268,9 @@ program
 
             let toAddress: Hex;
             let calldata: Hex | undefined;
+            let contractCode: string | undefined;
+
+            const explorer = new ContractExplorer(process.env.ETHERSCAN_API_KEY || '');
 
             if (target.length === 66) {
                 spinner.start('Fetching original tx calldata from mainnet...');
@@ -289,7 +292,24 @@ program
                     const selector = keccak256(toBytes(options.method)).slice(0, 10);
                     calldata = selector as Hex;
                 }
-                spinner.succeed(`Simulating → ${toAddress}  ${options.method}`);
+                const methodLabel = options.method === 'fallback()' ? '(Plain/Fallback)' : options.method;
+                spinner.succeed(`Simulating → ${toAddress}  ${methodLabel}`);
+            }
+
+            // Fetch Contract Details (Etherscan / Decompilation)
+            spinner.start('Scanning contract logic...');
+            const contractInfo = await explorer.getContractInfo(toAddress, options.rpc);
+            if (contractInfo.isVerified) {
+                spinner.succeed(`Verified source found: ${contractInfo.name}`);
+                contractCode = contractInfo.sourceCode;
+            } else {
+                spinner.info('Contract unverified. Attempting decompilation...');
+                contractCode = await explorer.decompile(toAddress);
+                if (contractCode) {
+                    spinner.succeed('Decompiled logic recovered.');
+                } else {
+                    spinner.warn('No readable code found. AI will audit raw trace only.');
+                }
             }
 
             spinner.start('Executing transaction on local fork...');
@@ -319,7 +339,7 @@ program
             }
 
             spinner.start(`Sending trace to AI (${engineLabel})...`);
-            const report = parser.formatForAI(parsed, trace);
+            const report = parser.formatForAI(parsed, trace, contractCode);
             const auditResult = await auditor.audit(report);
             spinner.stop();
 
@@ -385,6 +405,12 @@ program
                     ? console.log(chalk.green(`    [set]  ${p.label.padEnd(20)} ${p.envKey}`))
                     : console.log(chalk.gray(`    [---]  ${p.label.padEnd(20)} ${p.envKey}`));
             });
+
+            const ethKey = process.env.ETHERSCAN_API_KEY;
+            ethKey
+                ? console.log(chalk.green(`    [set]  Etherscan            ETHERSCAN_API_KEY`))
+                : console.log(chalk.gray(`    [---]  Etherscan            ETHERSCAN_API_KEY`));
+
             console.log('');
             return;
         }
