@@ -7,9 +7,12 @@ import { TransactionParser } from './parser.js';
 import { SecurityAuditor, type Verdict } from './ai.js';
 import {
     runBrainFlow,
+    runOllamaFlow,
+    runZeroSetupFlow,
     loadConfig,
     clearConfig,
     scanEnvironment,
+    getOllamaStatus,
     PROVIDERS,
 } from './brain.js';
 import { type Hex } from 'viem';
@@ -108,8 +111,17 @@ program
         let brainModel: string = options.model || '';
 
         if (options.ollama) {
-            aiMode = 'ollama';
-            brainModel = options.model || 'qwen3:4b-instruct';
+            // Discover installed Ollama models, let user pick
+            const picked = await runOllamaFlow(chalk);
+            if (!picked) {
+                const fallback = await runZeroSetupFlow(chalk);
+                if (fallback.mode === 'ollama') { aiMode = 'ollama'; brainModel = fallback.model; }
+                else if (fallback.mode === 'remote') { aiMode = 'remote'; brainProvider = fallback.provider; brainApiKey = fallback.apiKey; brainModel = fallback.model; }
+                else { console.log(chalk.yellow('  Proceeding without AI. Parser warnings only.\n')); }
+            } else {
+                aiMode = 'ollama';
+                brainModel = options.model || picked.model;
+            }
         } else if (options.brain) {
             // Check for saved preference first
             const saved = loadConfig();
@@ -141,23 +153,49 @@ program
                 brainModel = result.model;
             }
         } else {
-            // No flag — check saved config, else fall back to Ollama
+            // No flag — check saved config, else auto-detect
             const saved = loadConfig();
             if (saved) {
-                const provider = PROVIDERS[saved.provider];
-                const apiKey = process.env[provider?.envKey || ''];
-                if (provider && apiKey) {
-                    aiMode = 'remote';
-                    brainProvider = provider;
-                    brainApiKey = apiKey;
-                    brainModel = options.model || saved.model;
-                    console.log(chalk.gray(`  🧠 Using saved brain: ${provider.label} → ${brainModel}\n`));
+                if (saved.provider === 'ollama') {
+                    const status = await getOllamaStatus();
+                    if (status.running && status.models.includes(saved.model)) {
+                        aiMode = 'ollama'; brainModel = options.model || saved.model;
+                        console.log(chalk.gray(`  Using saved brain: Ollama → ${brainModel}\n`));
+                    } else {
+                        console.log(chalk.yellow(`  Saved Ollama model '${saved.model}' not found. Re-picking...\n`));
+                        const picked = await runOllamaFlow(chalk);
+                        if (picked) { aiMode = 'ollama'; brainModel = picked.model; }
+                    }
+                } else {
+                    const provider = PROVIDERS[saved.provider];
+                    const apiKey = process.env[provider?.envKey || ''];
+                    if (provider && apiKey) {
+                        aiMode = 'remote'; brainProvider = provider;
+                        brainApiKey = apiKey; brainModel = options.model || saved.model;
+                        console.log(chalk.gray(`  Using saved brain: ${provider.label} → ${brainModel}\n`));
+                    } else {
+                        console.log(chalk.yellow(`  Saved provider key missing. Re-running setup...\n`));
+                        const result = await runBrainFlow(chalk);
+                        aiMode = 'remote'; brainProvider = PROVIDERS[result.provider];
+                        brainApiKey = result.apiKey; brainModel = result.model;
+                    }
+                }
+            } else {
+                // Nothing saved — try Ollama first (privacy-first default)
+                const ollamaStatus = await getOllamaStatus();
+                if (ollamaStatus.running && ollamaStatus.models.length > 0) {
+                    aiMode = 'ollama';
+                    brainModel = options.model || ollamaStatus.models[0];
+                    console.log(chalk.gray(`  Auto-selected: Ollama → ${brainModel}  (use --ollama to pick a different model)\n`));
+                } else {
+                    // Nothing configured at all — zero-setup flow
+                    const fallback = await runZeroSetupFlow(chalk);
+                    if (fallback.mode === 'ollama') { aiMode = 'ollama'; brainModel = fallback.model; }
+                    else if (fallback.mode === 'remote') { aiMode = 'remote'; brainProvider = fallback.provider; brainApiKey = fallback.apiKey; brainModel = fallback.model; }
+                    else { console.log(chalk.yellow('  Proceeding without AI. Parser warnings only.\n')); }
                 }
             }
-            if (aiMode === 'ollama') {
-                brainModel = options.model || 'qwen3:4b-instruct';
-            }
-        }
+        }   // ── end flag resolution ────────────────────────────────────────
 
         const engineLabel = aiMode === 'remote'
             ? `${brainProvider.label} → ${brainModel}`
@@ -252,7 +290,7 @@ program
             await simulator.stop();
             process.exit(0);
         }
-    });
+    });  // end .action()
 
 // ════════════════════════════════════════════════════════════════════════════════
 // COMMAND: edith brain
@@ -283,7 +321,7 @@ program
             const config = loadConfig();
             const detected = scanEnvironment();
 
-            console.log(chalk.bold.hex('#00FFAA')('\n  🧠 EDITH BRAIN — Status\n'));
+            console.log(chalk.bold.hex('#00FFAA')('\n  EDITH BRAIN — Status\n'));
 
             if (config) {
                 const provider = PROVIDERS[config.provider];
@@ -291,8 +329,8 @@ program
                 console.log(chalk.white(`  Saved Provider : ${provider?.label || config.provider}`));
                 console.log(chalk.white(`  Saved Model    : ${config.model}`));
                 console.log(keyFound
-                    ? chalk.green(`  API Key        : ✅ ${provider?.envKey} is set`)
-                    : chalk.red(`  API Key        : ❌ ${provider?.envKey} NOT found in environment`));
+                    ? chalk.green(`  API Key        : [set]  ${provider?.envKey}`)
+                    : chalk.red(`  API Key        : [!!!]  ${provider?.envKey} NOT found in environment`));
             } else {
                 console.log(chalk.gray('  No saved preference. Currently using Ollama (local).\n'));
                 console.log(chalk.gray('  Run `edith brain` or use `--brain` flag on scan to configure.\n'));
@@ -302,8 +340,8 @@ program
             Object.values(PROVIDERS).forEach(p => {
                 const key = process.env[p.envKey];
                 key
-                    ? console.log(chalk.green(`    ✅  ${p.label.padEnd(28)} ${p.envKey}`))
-                    : console.log(chalk.gray(`    ❌  ${p.label.padEnd(28)} ${p.envKey}`));
+                    ? console.log(chalk.green(`    [set]  ${p.label.padEnd(20)} ${p.envKey}`))
+                    : console.log(chalk.gray(`    [---]  ${p.label.padEnd(20)} ${p.envKey}`));
             });
             console.log('');
             return;
@@ -311,7 +349,7 @@ program
 
         if (options.reset) {
             clearConfig();
-            console.log(chalk.green('\n  ✅ Brain preference cleared. Will use Ollama by default.\n'));
+            console.log(chalk.green('\n  [OK] Brain preference cleared. Will use Ollama by default.\n'));
             return;
         }
 
