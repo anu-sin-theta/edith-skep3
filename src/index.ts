@@ -54,7 +54,7 @@ function printVerdict(verdict: Verdict, reasoning: string, warnings: string[], e
         warnings.forEach(w => console.log(chalk.yellow(w)));
     }
 
-    console.log(chalk.gray('\n─'.repeat(56)));
+    console.log('\n' + chalk.gray('─'.repeat(56)));
     console.log(chalk.cyan.bold(`\n[🤖 AI AUDIT — ${engine}]`));
     console.log(chalk.white('\n' + reasoning));
     console.log('\n' + colors[verdict](`${icons[verdict]} VERDICT: ${verdict}`));
