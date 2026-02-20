@@ -27,7 +27,7 @@ function printBanner(target: string, engine: string) {
     console.log(chalk.bold.hex('#00FFAA')(`
   ╔══════════════════════════════════════════════════════╗
   ║   🛡️  EDITH SENTINEL  ·  Transaction Firewall        ║
-  ║   Privacy-First · Local EVM · AI-Powered Analysis    ║
+  ║   Privacy-First · Local EVM · Advanced Analysis      ║
   ╠══════════════════════════════════════════════════════╣
   ║   Target : ${target.slice(0, 42).padEnd(42)} ║
   ║   Brain  : ${engine.slice(0, 42).padEnd(42)} ║
@@ -55,7 +55,7 @@ function printVerdict(verdict: Verdict, reasoning: string, warnings: string[], e
     }
 
     console.log('\n' + chalk.gray('─'.repeat(56)));
-    console.log(chalk.cyan.bold(`\n[🤖 AI AUDIT — ${engine}]`));
+    console.log(chalk.cyan.bold(`\n[SECURITY AUDIT — ${engine}]`));
     console.log(chalk.white('\n' + reasoning));
     console.log('\n' + colors[verdict](`${icons[verdict]} VERDICT: ${verdict}`));
     console.log(chalk.gray('─'.repeat(56) + '\n'));
@@ -94,7 +94,7 @@ function printSplash() {
         '',
     ].join('\n')));
 
-    console.log(chalk.gray('  Privacy-First  ·  Local EVM Fork  ·  AI-Powered Security Analysis'));
+    console.log(chalk.gray('  Privacy-First  ·  Local EVM Fork  ·  Advanced Security Analysis'));
     console.log(chalk.gray('  Engineered by anu-sin-theta  |  https://anufied.me\n'));
 
     console.log(chalk.white('  USAGE\n'));
@@ -350,7 +350,7 @@ program
                 });
             }
 
-            spinner.start(`Sending trace to AI (${engineLabel})...`);
+            spinner.start(`Analyzing trace with ${engineLabel}...`);
             const report = parser.formatForAI(parsed, trace, contractCode);
             const auditResult = await auditor.audit(report);
             spinner.stop();
