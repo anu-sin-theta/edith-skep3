@@ -180,7 +180,17 @@ EVM begins:
 
 Every opcode. Recorded. Nothing hidden.
 
-### Step 3 — The Execution Recording
+### Step 3 — Architectural Analysis (v2.2.0)
+
+Raw traces tell you *what* happened, but Bytecode tells you *why*. EDITH now provides a three-layered code analysis:
+
+1. **Sourcify (Keyless)**: Fetches verified source files directly from the decentralized Sourcify repository.
+2. **Etherscan (Verified)**: Fetches original Solidity source code if the contract is verified.
+3. **Decompilation (Unverified)**: If no source is found, EDITH uses public decompilation APIs (api.dedub.io) to turn raw bytecode back into readable logic for the AI.
+
+This allows the AI to detect hidden backdoors, rug-pull logic, and malicious modifiers *within* the contract itself, even before it's ever executed.
+
+### Step 4 — The Execution Recording
 
 `debug_traceTransaction` on the **local Anvil node** returns the complete call tree:
 

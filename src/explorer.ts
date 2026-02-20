@@ -19,7 +19,32 @@ export class ContractExplorer {
         // 1. Fetch Bytecode from RPC
         const bytecode = await this.fetchBytecode(address, rpcUrl);
 
-        // 2. Try Fetching from Etherscan
+        // 2. Try Sourcify first (No API key required)
+        try {
+            const url = `https://sourcify.dev/server/files/any/1/${address}`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const data: any = await res.json();
+                if (data.status === 'full' || data.status === 'partial') {
+                    // Combine all source files into one for the AI
+                    const sourceCode = data.files
+                        .filter((f: any) => f.name.endsWith('.sol'))
+                        .map((f: any) => `// File: ${f.name}\n${f.content}`)
+                        .join('\n\n');
+
+                    return {
+                        sourceCode,
+                        name: 'Sourcify Verified',
+                        isVerified: true,
+                        bytecode,
+                    };
+                }
+            }
+        } catch (err) {
+            // Silently fail and move to Etherscan
+        }
+
+        // 3. Try Etherscan (Requires API key)
         if (this.etherscanKey) {
             try {
                 const url = `https://api.etherscan.io/api?module=contract&action=getsourcecode&address=${address}&apikey=${this.etherscanKey}`;

@@ -113,7 +113,7 @@ function printSplash() {
 program
     .name('edith')
     .description('Edith Sentinel — AI-Powered Web3 Transaction Firewall')
-    .version('2.1.0')
+    .version('2.2.0')
     .action(() => {
         // No subcommand given — show splash instead of error
         printSplash();
