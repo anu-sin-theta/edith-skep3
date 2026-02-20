@@ -220,102 +220,118 @@ export async function runZeroSetupFlow(chalk: any): Promise<
     console.log(chalk.gray('  Edith needs an AI to analyze transactions.'));
     console.log(chalk.gray('  You can use a local model (private, free) or a cloud API.\n'));
 
-    const choice = await select({
-        message: '  How would you like to set up the AI brain?',
-        choices: [
-            { name: 'Install Ollama + download a model  (local, free, private)', value: 'install-ollama' },
-            { name: 'Set up a cloud API key              (Gemini / OpenAI / Mistral / Claude)', value: 'setup-api' },
-            { name: 'Skip AI analysis                    (parser warnings only, no verdict)', value: 'skip' },
-        ],
-    });
+    try {
+        const choice = await select({
+            message: '  How would you like to set up the AI brain?',
+            choices: [
+                { name: 'Install Ollama + download a model  (local, free, private)', value: 'install-ollama' },
+                { name: 'Set up a cloud API key              (Gemini / OpenAI / Mistral / Claude)', value: 'setup-api' },
+                { name: 'Skip AI analysis                    (parser warnings only, no verdict)', value: 'skip' },
+            ],
+        });
 
-    // ── Option A: Install Ollama ───────────────────────────────────────────
-    if (choice === 'install-ollama') {
-        const status = await getOllamaStatus();
+        // ── Option A: Install Ollama ───────────────────────────────────────────
+        if (choice === 'install-ollama') {
+            const status = await getOllamaStatus();
 
-        let ollamaReady = status.running;
+            let ollamaReady = status.running;
 
-        if (!status.installed) {
-            const doInstall = await confirm({
-                message: '  Ollama is not installed. Install it now?',
-                default: true,
-            });
-            if (!doInstall) return { mode: 'skip' };
-
-            const installed = await installOllama(chalk);
-            if (!installed) return { mode: 'skip' };
-        }
-
-        if (!ollamaReady) {
-            console.log(chalk.cyan('\n  Starting Ollama server...'));
-            ollamaReady = await startOllamaServer();
-            if (!ollamaReady) {
-                console.log(chalk.red('  Could not start Ollama. Run `ollama serve` manually and retry.'));
-                return { mode: 'skip' };
-            }
-            console.log(chalk.green('  Ollama is running.\n'));
-        }
-
-        // Check if any models are already installed
-        const freshStatus = await getOllamaStatus();
-        let selectedModel: string;
-
-        if (freshStatus.models.length > 0) {
-            console.log(chalk.green(`\n  Found ${freshStatus.models.length} installed model(s).\n`));
-            const useExisting = await confirm({
-                message: '  Use an already-installed model?',
-                default: true,
-            });
-            if (useExisting) {
-                selectedModel = await select({
-                    message: '  Select model:',
-                    choices: freshStatus.models.map(m => ({ name: m, value: m })),
+            if (!status.installed) {
+                const doInstall = await confirm({
+                    message: '  Ollama is not installed. Install it now?',
+                    default: true,
                 });
+                if (!doInstall) return { mode: 'skip' };
+
+                const installed = await installOllama(chalk);
+                if (!installed) return { mode: 'skip' };
+            }
+
+            if (!ollamaReady) {
+                console.log(chalk.cyan('\n  Starting Ollama server...'));
+                ollamaReady = await startOllamaServer();
+                if (!ollamaReady) {
+                    console.log(chalk.red('  Could not start Ollama. Run `ollama serve` manually and retry.'));
+                    return { mode: 'skip' };
+                }
+                console.log(chalk.green('  Ollama is running.\n'));
+            }
+
+            // Check if any models are already installed
+            const freshStatus = await getOllamaStatus();
+            let selectedModel: string;
+
+            if (freshStatus.models.length > 0) {
+                console.log(chalk.green(`\n  Found ${freshStatus.models.length} installed model(s).\n`));
+                const useExisting = await confirm({
+                    message: '  Use an already-installed model?',
+                    default: true,
+                });
+                if (useExisting) {
+                    selectedModel = await select({
+                        message: '  Select model:',
+                        choices: freshStatus.models.map(m => ({ name: m, value: m })),
+                    });
+                } else {
+                    selectedModel = await pickAndPullModel(chalk);
+                }
             } else {
+                console.log(chalk.yellow('  No models installed yet. Pick one to download:\n'));
                 selectedModel = await pickAndPullModel(chalk);
             }
-        } else {
-            console.log(chalk.yellow('  No models installed yet. Pick one to download:\n'));
-            selectedModel = await pickAndPullModel(chalk);
+
+            const shouldSave = await confirm({ message: '  Save as default?', default: true });
+            if (shouldSave) saveConfig({ provider: 'ollama', model: selectedModel });
+
+            return { mode: 'ollama', model: selectedModel };
         }
 
-        const shouldSave = await confirm({ message: '  Save as default?', default: true });
-        if (shouldSave) saveConfig({ provider: 'ollama', model: selectedModel });
-
-        return { mode: 'ollama', model: selectedModel };
-    }
-
-    // ── Option B: Setup API Key ────────────────────────────────────────────
-    if (choice === 'setup-api') {
-        console.log(chalk.bold('\n  Set one of these in your shell and re-run edith:\n'));
-        Object.values(PROVIDERS).forEach(p => {
-            console.log(chalk.cyan(`  ${p.label}`));
-            console.log(chalk.gray(`    export ${p.envKey}="your-key-here"`));
-            console.log('');
-        });
-        console.log(chalk.gray('  After setting the key, run: edith brain\n'));
-        return { mode: 'skip' };
+        // ── Option B: Setup API Key ────────────────────────────────────────────
+        if (choice === 'setup-api') {
+            console.log(chalk.bold('\n  Set one of these in your shell and re-run edith:\n'));
+            Object.values(PROVIDERS).forEach(p => {
+                console.log(chalk.cyan(`  ${p.label}`));
+                console.log(chalk.gray(`    export ${p.envKey}="your-key-here"`));
+                console.log('');
+            });
+            console.log(chalk.gray('  After setting the key, run: edith brain\n'));
+            return { mode: 'skip' };
+        }
+    } catch (e: any) {
+        if (e.name === 'ExitPromptError') {
+            console.log(chalk.gray('\n\n  👋 Smoothly shutting down... Farewell, Sentinel.\n'));
+            process.exit(0);
+        }
+        throw e;
     }
 
     return { mode: 'skip' };
 }
 
 async function pickAndPullModel(chalk: any): Promise<string> {
-    const modelChoice = await select({
-        message: '  Select a model to download:',
-        choices: RECOMMENDED_OLLAMA_MODELS.map(m => ({
-            name: `${m.name.padEnd(22)} ${chalk.gray(m.size.padEnd(10))} ${chalk.dim(m.tag)}`,
-            value: m.name,
-        })),
-    });
+    try {
+        const modelChoice = await select({
+            message: '  Select a model to download:',
+            choices: RECOMMENDED_OLLAMA_MODELS.map(m => ({
+                name: `${m.name.padEnd(22)} ${chalk.gray(m.size.padEnd(10))} ${chalk.dim(m.tag)}`,
+                value: m.name,
+            })),
+        });
 
-    const pulled = await pullOllamaModel(modelChoice, chalk);
-    if (!pulled) {
-        console.log(chalk.red(`  Failed to pull ${modelChoice}. Check your internet connection.`));
-        process.exit(1);
+        const pulled = await pullOllamaModel(modelChoice, chalk);
+        if (!pulled) {
+            console.log(chalk.red(`  Failed to pull ${modelChoice}. Check your internet connection.`));
+            process.exit(1);
+        }
+        console.log(chalk.green(`\n  Model ready: ${modelChoice}\n`));
+        return modelChoice;
+    } catch (e: any) {
+        if (e.name === 'ExitPromptError') {
+            console.log(chalk.gray('\n\n  👋 Smoothly shutting down... Farewell, Sentinel.\n'));
+            process.exit(0);
+        }
+        throw e;
     }
-    console.log(chalk.green(`\n  Model ready: ${modelChoice}\n`));
-    return modelChoice;
 }
 
 // ─── Ollama Interactive Model Selector ───────────────────────────────────────
@@ -338,26 +354,34 @@ export async function runOllamaFlow(chalk: any): Promise<{ model: string } | nul
 
     const freshStatus = await getOllamaStatus();
 
-    if (freshStatus.models.length === 0) {
-        console.log(chalk.yellow('\n  No Ollama models installed.\n'));
-        const doPull = await confirm({ message: '  Download a recommended model now?', default: true });
-        if (!doPull) return null;
-        const model = await pickAndPullModel(chalk);
+    try {
+        if (freshStatus.models.length === 0) {
+            console.log(chalk.yellow('\n  No Ollama models installed.\n'));
+            const doPull = await confirm({ message: '  Download a recommended model now?', default: true });
+            if (!doPull) return null;
+            const model = await pickAndPullModel(chalk);
+            return { model };
+        }
+
+        if (freshStatus.models.length === 1) {
+            // Only one — use it automatically
+            console.log(chalk.gray(`  Using: ${freshStatus.models[0]}\n`));
+            return { model: freshStatus.models[0] };
+        }
+
+        // Multiple models — let user pick
+        const model = await select({
+            message: '  Select Ollama model:',
+            choices: freshStatus.models.map(m => ({ name: m, value: m })),
+        });
         return { model };
+    } catch (e: any) {
+        if (e.name === 'ExitPromptError') {
+            console.log(chalk.gray('\n\n  👋 Smoothly shutting down... Farewell, Sentinel.\n'));
+            process.exit(0);
+        }
+        throw e;
     }
-
-    if (freshStatus.models.length === 1) {
-        // Only one — use it automatically
-        console.log(chalk.gray(`  Using: ${freshStatus.models[0]}\n`));
-        return { model: freshStatus.models[0] };
-    }
-
-    // Multiple models — let user pick
-    const model = await select({
-        message: '  Select Ollama model:',
-        choices: freshStatus.models.map(m => ({ name: m, value: m })),
-    });
-    return { model };
 }
 
 // ─── Remote Provider Fetch ───────────────────────────────────────────────────
@@ -466,32 +490,77 @@ export async function runBrainFlow(chalk: any): Promise<BrainConfig & { apiKey: 
         process.exit(1);
     }
 
-    const providerChoice = await select({
-        message: '  Select AI provider:',
-        choices: detected.map(d => ({ name: d.provider.label, value: d.provider.name })),
-    });
+    const ollamaStatus = await getOllamaStatus();
 
-    const selectedProvider = PROVIDERS[providerChoice];
-    const apiKey = process.env[selectedProvider.envKey]!;
+    // Add Ollama and Management options to the main list
+    const mainChoices = [
+        ...detected.map(d => ({ name: d.provider.label, value: d.provider.name })),
+        { name: 'Ollama (Local AI)', value: 'ollama' },
+        { name: chalk.yellow('Default / Revert  (Clear Saved Brain)'), value: 'reset' },
+    ];
 
-    process.stdout.write(chalk.cyan(`\n  Fetching models from ${selectedProvider.label}...`));
-    const models = await fetchAvailableModels(selectedProvider, apiKey);
-    process.stdout.write(chalk.green(` ${models.length} found\n\n`));
+    try {
+        const providerChoice = await select({
+            message: '  Select AI provider:',
+            choices: mainChoices,
+        });
 
-    const modelChoice = await select({
-        message: '  Select model:',
-        choices: models.map(m => ({ name: m, value: m })),
-        pageSize: 12,
-    });
+        if (providerChoice === 'reset') {
+            clearConfig();
+            console.log(chalk.green('\n  ✅ Saved preference cleared. Using local defaults.\n'));
+            process.exit(0);
+        }
 
-    const shouldSave = await confirm({ message: '  Save as default?', default: true });
-    const config: BrainConfig = { provider: providerChoice, model: modelChoice };
+        if (providerChoice === 'ollama') {
+            if (!ollamaStatus.running) {
+                console.log(chalk.red('\n  Ollama is not running. Start it with `ollama serve` and retry.\n'));
+                process.exit(1);
+            }
 
-    if (shouldSave) {
-        saveConfig(config);
-        console.log(chalk.green(`\n  ✅ Preference saved → ${CONFIG_PATH}`));
+            const models = ollamaStatus.models;
+            if (models.length === 0) {
+                console.log(chalk.yellow('\n  No Ollama models found. Use `--ollama` on scan to download one.\n'));
+                process.exit(1);
+            }
+
+            const modelChoice = await select({
+                message: '  Select local model:',
+                choices: models.map(m => ({ name: m, value: m })),
+            });
+
+            saveConfig({ provider: 'ollama', model: modelChoice });
+            console.log(chalk.green(`\n  ✅ Preference saved → Ollama : ${modelChoice}\n`));
+            process.exit(0);
+        }
+
+        const selectedProvider = PROVIDERS[providerChoice];
+        const apiKey = process.env[selectedProvider.envKey]!;
+
+        process.stdout.write(chalk.cyan(`\n  Fetching models from ${selectedProvider.label}...`));
+        const models = await fetchAvailableModels(selectedProvider, apiKey);
+        process.stdout.write(chalk.green(` ${models.length} found\n\n`));
+
+        const modelChoice = await select({
+            message: '  Select model:',
+            choices: models.map(m => ({ name: m, value: m })),
+            pageSize: 12,
+        });
+
+        const shouldSave = await confirm({ message: '  Save as default?', default: true });
+        const config: BrainConfig = { provider: providerChoice, model: modelChoice };
+
+        if (shouldSave) {
+            saveConfig(config);
+            console.log(chalk.green(`\n  ✅ Preference saved → ${CONFIG_PATH}`));
+        }
+
+        console.log(chalk.bold.hex('#00FFAA')(`\n  Active Brain: ${selectedProvider.label}  →  ${modelChoice}\n`));
+        return { ...config, apiKey };
+    } catch (e: any) {
+        if (e.name === 'ExitPromptError') {
+            console.log(chalk.gray('\n\n  👋 Smoothly shutting down... Farewell, Sentinel.\n'));
+            process.exit(0);
+        }
+        throw e;
     }
-
-    console.log(chalk.bold.hex('#00FFAA')(`\n  Active Brain: ${selectedProvider.label}  →  ${modelChoice}\n`));
-    return { ...config, apiKey };
 }

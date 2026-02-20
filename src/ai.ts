@@ -31,30 +31,28 @@ TECHNICAL_DETAIL: [One technical sentence]`;
 }
 
 function parseVerdict(raw: string, engine: string, simulationReport?: string): AuditResult {
-    // 0. Save raw for debugging
     try {
         const logPath = path.join(os.homedir(), '.config', 'edith-sentinel', 'last-audit.raw');
         fs.writeFileSync(logPath, raw);
     } catch { }
 
-    // 1. Strip thinking tags if present (e.g. <thought> blocks in some models)
     let cleanRaw = raw.replace(/<thought>[^]*?<\/thought>/gi, '').trim();
-    if (!cleanRaw && raw) cleanRaw = raw; // Use original if everything was stripped
+    if (!cleanRaw && raw) cleanRaw = raw;
 
-    // 2. Extract Verdict
     const verdictMatch = cleanRaw.match(/(?:\*\*)?VERDICT(?:\*\*)?:?\s*(SAFE|RISKY|CRITICAL)/i);
     let verdict = (verdictMatch?.[1]?.toUpperCase() as Verdict);
 
-    // 3. Extract Reasoning
     const reasonMatch = cleanRaw.match(/(?:\*\*)?REASON(?:\*\*)?:?\s*([^]*?)(?=(?:\*\*)?TECHNICAL_DETAIL:?|$)/si);
     let reasoning = reasonMatch?.[1]?.trim() || '';
 
-    // 4. Robust Fallbacks
+    // AGGRESSIVE DETECTION
+    const isMalicious = simulationReport?.includes('SECURITY ALERT') || simulationReport?.includes('!!!') || simulationReport?.includes('🚨');
+
     if (!verdict) {
-        if (cleanRaw.includes('CRITICAL') || simulationReport?.includes('!!! THREAT INTELLIGENCE REPORT !!!')) verdict = 'CRITICAL';
+        if (cleanRaw.includes('CRITICAL') || isMalicious) verdict = 'CRITICAL';
         else if (cleanRaw.includes('RISKY')) verdict = 'RISKY';
         else if (cleanRaw.includes('SAFE')) verdict = 'SAFE';
-        else if (simulationReport?.includes('Gas Used: 21000')) verdict = 'SAFE';
+        else if (simulationReport?.includes('Gas Used: 21000') && !isMalicious) verdict = 'SAFE';
         else verdict = 'RISKY';
     }
 
@@ -65,8 +63,9 @@ function parseVerdict(raw: string, engine: string, simulationReport?: string): A
             .trim();
     }
 
-    if (simulationReport?.includes('!!! THREAT INTELLIGENCE REPORT !!!')) {
-        reasoning = "⚠️ CRITICAL THREAT DETECTED: This address is identified in active malware campaigns. Interacting with this contract is extremely dangerous. " + (reasoning || '');
+    if (isMalicious) {
+        reasoning = "⚠️ SECURITY ALERT: Malicious activity detected by EDITH's core engine. " + (reasoning || '');
+        verdict = 'CRITICAL';
     }
 
     if (!reasoning) reasoning = 'No detailed reasoning provided by AI. Review logs manually.';
@@ -74,8 +73,6 @@ function parseVerdict(raw: string, engine: string, simulationReport?: string): A
 
     return { verdict, reasoning, raw: cleanRaw, engine };
 }
-
-// ─── Ollama Auditor (local) ────────────────────────────────────────────────────
 
 export class OllamaAuditor {
     private ollama: Ollama;
@@ -98,12 +95,12 @@ export class OllamaAuditor {
             return parseVerdict(response.message.content, `ollama/${this.model}`, simulationReport);
 
         } catch (error: any) {
-            const isThreat = simulationReport.includes('!!! THREAT INTELLIGENCE REPORT !!!');
+            const isMalicious = simulationReport.includes('SECURITY ALERT') || simulationReport.includes('🚨');
             const isSimple = simulationReport?.includes('Gas Used: 21000');
             return {
-                verdict: isThreat ? 'CRITICAL' : (isSimple ? 'SAFE' : 'RISKY'),
-                reasoning: isThreat
-                    ? `⚠️ CRITICAL THREAT: Address matches known malicious database (UNC5342).`
+                verdict: isMalicious ? 'CRITICAL' : (isSimple ? 'SAFE' : 'RISKY'),
+                reasoning: isMalicious
+                    ? `⚠️ SECURITY ALERT: Local engine detected a critical threat logic.`
                     : (isSimple
                         ? `Ollama error, but transaction looks like a simple ETH transfer (21k gas).`
                         : `Ollama error: ${error.message}`),
@@ -113,8 +110,6 @@ export class OllamaAuditor {
         }
     }
 }
-
-// ─── Remote Brain Auditor (Gemini / OpenAI / Mistral / Claude) ────────────────
 
 export class RemoteAuditor {
     private client: OpenAI;
@@ -142,12 +137,13 @@ export class RemoteAuditor {
             return parseVerdict(content, `${this.provider.name}/${this.model}`, simulationReport);
 
         } catch (error: any) {
-            const isThreat = simulationReport.includes('!!! THREAT INTELLIGENCE REPORT !!!');
+            const isMalicious = simulationReport.includes('SECURITY ALERT') || simulationReport.includes('🚨');
             const isSimple = simulationReport?.includes('Gas Used: 21000');
+
             return {
-                verdict: isThreat ? 'CRITICAL' : (isSimple ? 'SAFE' : 'RISKY'),
-                reasoning: isThreat
-                    ? `⚠️ CRITICAL THREAT: Address matches known malicious database (UNC5342).`
+                verdict: isMalicious ? 'CRITICAL' : (isSimple ? 'SAFE' : 'RISKY'),
+                reasoning: isMalicious
+                    ? `⚠️ SECURITY ALERT: Local engine detected a critical threat logic.`
                     : (isSimple
                         ? `AI Error (${this.provider.label}), but transaction looks like a simple ETH transfer (21k gas).`
                         : `Remote AI error (${this.provider.label}): ${error.message}`),
@@ -157,10 +153,6 @@ export class RemoteAuditor {
         }
     }
 }
-
-// ─── Unified SecurityAuditor (selected by mode) ────────────────────────────────
-
-export type AuditMode = 'ollama' | 'remote';
 
 export class SecurityAuditor {
     private auditor: OllamaAuditor | RemoteAuditor;
@@ -185,3 +177,5 @@ export class SecurityAuditor {
         return this.auditor.audit(simulationReport);
     }
 }
+
+export type AuditMode = 'ollama' | 'remote';

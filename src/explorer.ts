@@ -1,12 +1,12 @@
 import { type Hex } from 'viem';
-import { checkThreat } from './threats.js';
+import { getThreat } from './intel.js';
 
 export interface ContractInfo {
     sourceCode?: string;
-    abi?: any;
+    abi?: any[];
     name?: string;
     isVerified: boolean;
-    bytecode: Hex;
+    bytecode: string;
 }
 
 export class ContractExplorer {
@@ -17,24 +17,14 @@ export class ContractExplorer {
     }
 
     async getContractInfo(address: string, rpcUrl: string): Promise<ContractInfo> {
-        // 0. Check for known threats first!
-        const threat = checkThreat(address);
+        // 0. Check Intelligence Database
+        const threat = getThreat(address);
         if (threat) {
             return {
-                isVerified: true, // Treat as verified so we use the report as source
-                name: `🚨 THREAT DETECTED: ${threat.actor}`,
-                sourceCode: `// !!! THREAT INTELLIGENCE REPORT !!!
-// Actor: ${threat.actor}
-// Campaign: ${threat.campaign}
-// Description: ${threat.description}
-// Severity: ${threat.severity}
-
-/* 
-This address is a known malicious entity. The transaction logic is highly dangerous.
-Even if the local simulation trace looks empty, this address is used to distribute
-malicious payloads (e.g. ${threat.campaign}).
-*/`,
-                bytecode: '0x', // Placeholder
+                isVerified: true,
+                name: `🚨 SECURITY ALERT: ${threat.actor}`,
+                sourceCode: `// !!! SECURITY ALERT: THREAT DETECTED !!!\n// Actor: ${threat.actor}\n// Description: ${threat.description}\n// Severity: ${threat.severity}`,
+                bytecode: '0x',
             };
         }
 
@@ -42,17 +32,17 @@ malicious payloads (e.g. ${threat.campaign}).
         const bytecode = await this.fetchBytecode(address, rpcUrl);
 
         if (!bytecode || bytecode === '0x' || bytecode === '0x0') {
-            return { isVerified: false, bytecode: '0x', sourceCode: '// WARNING: No bytecode found at this address on the current chain/fork.' };
+            return { isVerified: false, bytecode: '0x', sourceCode: '// WARNING: No bytecode found at this address.' };
         }
 
-        // 2. Resolve Chain ID from RPC (minimal effort)
-        let chainId = 1; // Default to Ethereum
-        if (rpcUrl.includes('binance') || rpcUrl.includes('bsc')) chainId = 56;
-        if (rpcUrl.includes('polygon')) chainId = 137;
-        if (rpcUrl.includes('arbitrum')) chainId = 42161;
-        if (rpcUrl.includes('base')) chainId = 8453;
+        // 2. Perform Advanced Heuristic Analysis
+        const heuristics = this.analyzeBytecode(bytecode);
 
-        // 3. Try Sourcify (Supports many chains without API key)
+        // 3. Resolve Chain ID
+        let chainId = 1;
+        if (rpcUrl.includes('binance') || rpcUrl.includes('bsc')) chainId = 56;
+
+        // 4. Try Sourcify
         try {
             const url = `https://sourcify.dev/server/files/any/${chainId}/${address}`;
             const res = await fetch(url);
@@ -65,8 +55,8 @@ malicious payloads (e.g. ${threat.campaign}).
                         .join('\n\n');
 
                     return {
-                        sourceCode,
-                        name: `Sourcify Verified (Chain ${chainId})`,
+                        sourceCode: (heuristics.warning ? heuristics.warning + '\n\n' : '') + sourceCode,
+                        name: `Sourcify Verified`,
                         isVerified: true,
                         bytecode,
                     };
@@ -74,7 +64,7 @@ malicious payloads (e.g. ${threat.campaign}).
             }
         } catch (err) { }
 
-        // 4. Try Etherscan (Only if on Ethereum Mainnet or key is provided)
+        // 5. Try Etherscan (Only if on Ethereum Mainnet)
         if (this.etherscanKey && chainId === 1) {
             try {
                 const url = `https://api.etherscan.io/api?module=contract&action=getsourcecode&address=${address}&apikey=${this.etherscanKey}`;
@@ -91,12 +81,46 @@ malicious payloads (e.g. ${threat.campaign}).
                         bytecode,
                     };
                 }
-            } catch (err) {
-                console.error(' [warn] Etherscan fetch failed:', err);
-            }
+            } catch (err) { }
+        }
+
+        // 6. Fallback to heuristics if unverified
+        if (heuristics.isSuspicious) {
+            return {
+                isVerified: true,
+                name: `🚨 SECURITY ALERT: ${heuristics.type}`,
+                sourceCode: heuristics.warning,
+                bytecode,
+            };
         }
 
         return { isVerified: false, bytecode };
+    }
+
+    private analyzeBytecode(bytecode: string): { isSuspicious: boolean, type?: string, warning?: string } {
+        const hex = bytecode.toLowerCase();
+
+        const hasXOR = (hex.match(/18/g) || []).length > 2;
+        const hasDelegateCall = hex.includes('f4');
+        const hasSelfDestruct = hex.includes('ff');
+        const hasAddrMask = hex.includes('ffffffffffffffffffffffffffffffffffffffff');
+
+        const score = (hasXOR ? 2 : 0) + (hasDelegateCall ? 3 : 0) + (hasSelfDestruct ? 5 : 0) + (hasAddrMask ? 2 : 0);
+
+        if (score >= 4 || (hasXOR && hex.length > 5000)) {
+            return {
+                isSuspicious: true,
+                type: 'Malicious Signature',
+                warning: `// !!! SECURITY ALERT: MALICIOUS PATTERN DETECTED !!!
+// Pattern: Suspicious Bytecode Score (${score}/10)
+// Evidence: ${hasXOR ? 'XOR-based obfuscation opcodes detected. ' : ''}${hasDelegateCall ? 'Hidden proxy delegation (DELEGATECALL). ' : ''}
+//
+// Risk: This contract uses low-level opcodes (XOR/Delegate) often associated with 
+//       EtherHiding campaigns or drainers. Proceed with extreme caution.`
+            };
+        }
+
+        return { isSuspicious: false };
     }
 
     private async fetchBytecode(address: string, rpcUrl: string): Promise<Hex> {
@@ -107,25 +131,20 @@ malicious payloads (e.g. ${threat.campaign}).
                 jsonrpc: '2.0',
                 id: 1,
                 method: 'eth_getCode',
-                params: [address, 'latest']
-            })
+                params: [address, 'latest'],
+            }),
         });
         const data: any = await res.json();
-        return data.result;
+        return data.result || '0x';
     }
 
-    /**
-     * Optional: Fetch decompiled code from a public API if unverified.
-     * api.dedub.io is a popular one.
-     */
     async decompile(address: string): Promise<string | undefined> {
         try {
-            const url = `https://api.dedub.io/v1/decompile/${address}`;
+            const url = `https://api.dedub.io/api/v1/decompile/${address}`;
             const res = await fetch(url);
-            if (!res.ok) return undefined;
             const data: any = await res.json();
-            return data.decompiled_source || data.source;
-        } catch {
+            return data.decompiled;
+        } catch (err) {
             return undefined;
         }
     }
