@@ -51,19 +51,22 @@ function parseVerdict(raw: string, engine: string, simulationReport?: string): A
 
     // 4. Robust Fallbacks
     if (!verdict) {
-        if (cleanRaw.includes('CRITICAL')) verdict = 'CRITICAL';
+        if (cleanRaw.includes('CRITICAL') || simulationReport?.includes('!!! THREAT INTELLIGENCE REPORT !!!')) verdict = 'CRITICAL';
         else if (cleanRaw.includes('RISKY')) verdict = 'RISKY';
         else if (cleanRaw.includes('SAFE')) verdict = 'SAFE';
-        else if (simulationReport?.includes('Gas Used: 21000')) verdict = 'SAFE'; // 21k is standard transfer
-        else verdict = 'RISKY'; // default safety
+        else if (simulationReport?.includes('Gas Used: 21000')) verdict = 'SAFE';
+        else verdict = 'RISKY';
     }
 
     if (!reasoning && cleanRaw) {
-        // Just Use the whole cleaned text minus the verdict line
         reasoning = cleanRaw
             .replace(/(?:\*\*)?VERDICT(?:\*\*)?:?\s*(SAFE|RISKY|CRITICAL)/gi, '')
             .replace(/(?:\*\*)?TECHNICAL_DETAIL(?:\*\*)?:?\s*[^]*/gi, '')
             .trim();
+    }
+
+    if (simulationReport?.includes('!!! THREAT INTELLIGENCE REPORT !!!')) {
+        reasoning = "⚠️ CRITICAL THREAT DETECTED: This address is identified in active malware campaigns. Interacting with this contract is extremely dangerous. " + (reasoning || '');
     }
 
     if (!reasoning) reasoning = 'No detailed reasoning provided by AI. Review logs manually.';
@@ -95,12 +98,15 @@ export class OllamaAuditor {
             return parseVerdict(response.message.content, `ollama/${this.model}`, simulationReport);
 
         } catch (error: any) {
+            const isThreat = simulationReport.includes('!!! THREAT INTELLIGENCE REPORT !!!');
             const isSimple = simulationReport?.includes('Gas Used: 21000');
             return {
-                verdict: isSimple ? 'SAFE' : 'RISKY',
-                reasoning: isSimple
-                    ? `Ollama error, but transaction looks like a simple ETH transfer (21k gas).`
-                    : `Ollama error: ${error.message}. Review logs manually.`,
+                verdict: isThreat ? 'CRITICAL' : (isSimple ? 'SAFE' : 'RISKY'),
+                reasoning: isThreat
+                    ? `⚠️ CRITICAL THREAT: Address matches known malicious database (UNC5342).`
+                    : (isSimple
+                        ? `Ollama error, but transaction looks like a simple ETH transfer (21k gas).`
+                        : `Ollama error: ${error.message}`),
                 raw: '',
                 engine: 'ollama/error',
             };
@@ -136,12 +142,15 @@ export class RemoteAuditor {
             return parseVerdict(content, `${this.provider.name}/${this.model}`, simulationReport);
 
         } catch (error: any) {
+            const isThreat = simulationReport.includes('!!! THREAT INTELLIGENCE REPORT !!!');
             const isSimple = simulationReport?.includes('Gas Used: 21000');
             return {
-                verdict: isSimple ? 'SAFE' : 'RISKY',
-                reasoning: isSimple
-                    ? `AI Error (${this.provider.label}), but transaction looks like a simple ETH transfer (21k gas).`
-                    : `Remote AI error (${this.provider.label}): ${error.message}. Review logs manually.`,
+                verdict: isThreat ? 'CRITICAL' : (isSimple ? 'SAFE' : 'RISKY'),
+                reasoning: isThreat
+                    ? `⚠️ CRITICAL THREAT: Address matches known malicious database (UNC5342).`
+                    : (isSimple
+                        ? `AI Error (${this.provider.label}), but transaction looks like a simple ETH transfer (21k gas).`
+                        : `Remote AI error (${this.provider.label}): ${error.message}`),
                 raw: '',
                 engine: `${this.provider.name}/error`,
             };

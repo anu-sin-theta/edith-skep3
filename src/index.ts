@@ -299,9 +299,21 @@ program
             // Fetch Contract Details (Etherscan / Decompilation)
             spinner.start('Scanning contract logic...');
             const contractInfo = await explorer.getContractInfo(toAddress, options.rpc);
-            if (contractInfo.isVerified) {
-                spinner.succeed(`Verified source found: ${contractInfo.name}`);
+
+            if (contractInfo.sourceCode) {
+                // We found something (Verified source, Decompiled code, or a Threat Report)
                 contractCode = contractInfo.sourceCode;
+                if (contractInfo.isVerified) {
+                    spinner.succeed(contractInfo.name?.includes('🚨')
+                        ? chalk.redBright.bold(contractInfo.name)
+                        : `Verified source found: ${contractInfo.name || 'Unknown'}`);
+                } else {
+                    spinner.succeed('Decompiled logic recovered.');
+                }
+            } else if (!contractInfo.bytecode || contractInfo.bytecode === '0x' || contractInfo.bytecode === '0x0') {
+                spinner.warn(chalk.yellow(`Target contract not found on this chain.`));
+                console.log(chalk.gray(`  (Wait! If this is BSC/Polygon/etc, use: --rpc <url>)\n`));
+                contractCode = undefined;
             } else {
                 spinner.info('Contract unverified. Attempting decompilation...');
                 contractCode = await explorer.decompile(toAddress);
