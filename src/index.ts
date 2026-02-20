@@ -71,11 +71,53 @@ function printVerdict(verdict: Verdict, reasoning: string, warnings: string[], e
     }
 }
 
+// ─── Splash (no-args) ────────────────────────────────────────────────────────
+function printSplash() {
+    console.log(chalk.hex('#00FFAA')([
+        '',
+        '  ███████╗██████╗ ██╗████████╗██╗  ██╗',
+        '  ██╔════╝██╔══██╗██║╚══██╔══╝██║  ██║',
+        '  █████╗  ██║  ██║██║   ██║   ███████║',
+        '  ██╔══╝  ██║  ██║██║   ██║   ██╔══██║',
+        '  ███████╗██████╔╝██║   ██║   ██║  ██║',
+        '  ╚══════╝╚═════╝ ╚═╝   ╚═╝   ╚═╝  ╚═╝',
+        '',
+    ].join('\n')));
+
+    console.log(chalk.hex('#00CC88')([
+        '  ███████╗███████╗███╗   ██╗████████╗██╗███╗   ██╗███████╗██╗',
+        '  ██╔════╝██╔════╝████╗  ██║╚══██╔══╝██║████╗  ██║██╔════╝██║',
+        '  ███████╗█████╗  ██╔██╗ ██║   ██║   ██║██╔██╗ ██║█████╗  ██║',
+        '  ╚════██║██╔══╝  ██║╚██╗██║   ██║   ██║██║╚██╗██║██╔══╝  ██║',
+        '  ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗',
+        '  ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝',
+        '',
+    ].join('\n')));
+
+    console.log(chalk.gray('  Privacy-First  ·  Local EVM Fork  ·  AI-Powered Security Analysis'));
+    console.log(chalk.gray('  Engineered by anu-sin-theta  |  https://anufied.me\n'));
+
+    console.log(chalk.white('  USAGE\n'));
+    console.log(chalk.cyan('    edith scan') + chalk.gray(' <contract|txhash>   ') + chalk.white('Simulate and audit a transaction'));
+    console.log(chalk.cyan('    edith brain') + chalk.gray('                     ') + chalk.white('Configure AI provider (Gemini, OpenAI, Mistral, Claude)'));
+    console.log(chalk.cyan('    edith test-ai') + chalk.gray('                   ') + chalk.white('Verify AI connection with a mock scan'));
+    console.log(chalk.cyan('    edith --help') + chalk.gray('                    ') + chalk.white('Show full help\n'));
+
+    console.log(chalk.white('  EXAMPLES\n'));
+    console.log(chalk.gray('    edith scan 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --method "approve(address,uint256)"'));
+    console.log(chalk.gray('    edith scan 0xTxHash --brain'));
+    console.log(chalk.gray('    edith brain --status\n'));
+}
+
 // ─── CLI Setup ────────────────────────────────────────────────────────────────
 program
     .name('edith')
     .description('Edith Sentinel — AI-Powered Web3 Transaction Firewall')
-    .version('2.1.0');
+    .version('2.1.0')
+    .action(() => {
+        // No subcommand given — show splash instead of error
+        printSplash();
+    });
 
 // ════════════════════════════════════════════════════════════════════════════════
 // COMMAND: edith scan
