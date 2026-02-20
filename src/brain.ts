@@ -406,7 +406,7 @@ export async function runBrainFlow(chalk: any): Promise<BrainConfig & { apiKey: 
     allProviders.forEach(p => {
         const key = process.env[p.envKey];
         if (key) {
-            const masked = key.slice(0, 6) + '*'.repeat(Math.min(12, key.length - 10)) + key.slice(-4);
+            const masked = key.slice(0, 6) + '*'.repeat(Math.max(0, Math.min(12, key.length - 10))) + key.slice(-4);
             console.log(chalk.green(`    [set]  ${p.label.padEnd(20)} ${p.envKey} = ${chalk.gray(masked)}`));
         } else {
             console.log(chalk.gray(`    [---]  ${p.label.padEnd(20)} ${chalk.dim(p.envKey + ' not set')}  `));
