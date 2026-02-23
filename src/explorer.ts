@@ -55,7 +55,7 @@ export class ContractExplorer {
                         .join('\n\n');
 
                     return {
-                        sourceCode: (heuristics.warning ? heuristics.warning + '\n\n' : '') + sourceCode,
+                        sourceCode: sourceCode,
                         name: `Sourcify Verified`,
                         isVerified: true,
                         bytecode,
@@ -87,7 +87,7 @@ export class ContractExplorer {
         // 6. Fallback to heuristics if unverified
         if (heuristics.isSuspicious) {
             return {
-                isVerified: true,
+                isVerified: false,
                 name: `🚨 SECURITY ALERT: ${heuristics.type}`,
                 sourceCode: heuristics.warning,
                 bytecode,
@@ -124,21 +124,58 @@ export class ContractExplorer {
     }
 
     private async fetchBytecode(address: string, rpcUrl: string): Promise<Hex> {
-        const res = await fetch(rpcUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                jsonrpc: '2.0',
-                id: 1,
-                method: 'eth_getCode',
-                params: [address, 'latest'],
-            }),
-        });
-        const data: any = await res.json();
-        return data.result || '0x';
+        try {
+            const res = await fetch(rpcUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 1,
+                    method: 'eth_getCode',
+                    params: [address, 'latest'],
+                }),
+            });
+            if (!res.ok) return '0x';
+            const text = await res.text();
+            try {
+                const data = JSON.parse(text);
+                return data.result || '0x';
+            } catch (e) {
+                return '0x';
+            }
+        } catch (e) {
+            return '0x';
+        }
     }
 
-    async decompile(address: string): Promise<string | undefined> {
+    async decompile(address: string, bytecode?: string): Promise<string | undefined> {
+        // Try local Heimdall first
+        try {
+            const { execSync } = await import('child_process');
+            // If we have bytecode, we can decompile directly, otherwise we'd need RPC but we usually have bytecode.
+            if (bytecode && bytecode.length > 100) {
+                // Write bytecode to a temp file
+                const fs = await import('fs');
+                const os = await import('os');
+                const path = await import('path');
+                const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edith-decompile-'));
+                const tempFile = path.join(tempDir, 'bytecode.hex');
+                fs.writeFileSync(tempFile, bytecode);
+
+                try {
+                    // This outputs decompiled code to stdout or a file depending on heimdall version
+                    // We'll try a basic exec strategy assuming it outputs to stdout
+                    const output = execSync(`heimdall decompile ${tempFile}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+                    return `// Local Heimdall Decompilation\n${output}`;
+                } catch (e) {
+                    // Heimdall failed or not installed. Fall through to fallback
+                } finally {
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                }
+            }
+        } catch (e) { }
+
+        // Fallback to dedub API
         try {
             const url = `https://api.dedub.io/api/v1/decompile/${address}`;
             const res = await fetch(url);

@@ -15,7 +15,8 @@ import {
     getOllamaStatus,
     PROVIDERS,
 } from './brain.js';
-import { type Hex } from 'viem';
+import { confirm } from '@inquirer/prompts';
+import { type Hex, formatEther } from 'viem';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { ContractExplorer } from './explorer.js';
@@ -26,11 +27,11 @@ const program = new Command();
 function printBanner(target: string, engine: string) {
     console.log(chalk.bold.hex('#00FFAA')(`
   ╔══════════════════════════════════════════════════════╗
-  ║   🛡️  EDITH SENTINEL  ·  Transaction Firewall        ║
+  ║   🛡️  EDITH SKEP3  ·  Transaction Firewall         ║
   ║   Privacy-First · Local EVM · Advanced Analysis      ║
   ╠══════════════════════════════════════════════════════╣
-  ║   Target : ${target.slice(0, 42).padEnd(42)} ║
-  ║   Brain  : ${engine.slice(0, 42).padEnd(42)} ║
+  ║   Target : ${target.slice(0, 42).padEnd(42)}         ║
+  ║   Brain  : ${engine.slice(0, 42).padEnd(42)}         ║
   ╚══════════════════════════════════════════════════════╝
 `));
 }
@@ -85,17 +86,17 @@ function printSplash() {
     ].join('\n')));
 
     console.log(chalk.hex('#00CC88')([
-        '  ███████╗███████╗███╗   ██╗████████╗██╗███╗   ██╗███████╗██╗',
-        '  ██╔════╝██╔════╝████╗  ██║╚══██╔══╝██║████╗  ██║██╔════╝██║',
-        '  ███████╗█████╗  ██╔██╗ ██║   ██║   ██║██╔██╗ ██║█████╗  ██║',
-        '  ╚════██║██╔══╝  ██║╚██╗██║   ██║   ██║██║╚██╗██║██╔══╝  ██║',
-        '  ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗',
-        '  ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝',
+        '  ███████╗██╗  ██╗███████╗██████╗ ██████╗ ',
+        '  ██╔════╝██║ ██╔╝██╔════╝██╔══██╗╚════██╗',
+        '  ███████╗█████╔╝ █████╗  ██████╔╝ █████╔╝',
+        '  ╚════██║██╔═██╗ ██╔══╝  ██╔═══╝  ╚═══██╗',
+        '  ███████║██║  ██╗███████╗██║     ██████╔╝',
+        '  ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝     ╚═════╝ ',
         '',
     ].join('\n')));
 
     console.log(chalk.gray('  Privacy-First  ·  Local EVM Fork  ·  Advanced Security Analysis'));
-    console.log(chalk.gray('  Engineered by anu-sin-theta  |  https://anufied.me\n'));
+    console.log(chalk.gray('                                v2.4 | anubhav singh | https://anufied.me\n'));
 
     console.log(chalk.white('  USAGE\n'));
     console.log(chalk.cyan('    edith scan') + chalk.gray(' <contract|txhash>   ') + chalk.white('Simulate and audit a transaction'));
@@ -140,10 +141,11 @@ program
     .option('--from <address>', 'Wallet to impersonate', '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266')
     .option('--value <wei>', 'ETH value to send in wei', '0')
     .option('--data <hex>', 'Raw calldata hex')
-    .option('--rpc <url>', 'Remote RPC for mainnet fork', DEFAULT_FORK_RPC)
+    .option('--rpc <url_or_alias>', 'Remote RPC URL or alias (e.g. "llamarpc")', DEFAULT_FORK_RPC)
     .option('--brain', 'Use cloud AI (Gemini / OpenAI / Mistral / Claude). Runs setup flow if no saved preference.')
     .option('--ollama', 'Force local Ollama AI (overrides saved brain preference)')
     .option('--model <name>', 'Override AI model name')
+    .option('-v, --verbose', 'Show detailed execution trace logs in the console')
     .action(async (target: string, options) => {
 
         // ── Resolve AI mode ────────────────────────────────────────────────
@@ -243,10 +245,18 @@ program
             ? `${brainProvider.label} → ${brainModel}`
             : `Ollama → ${brainModel}`;
 
+        // ── Resolve RPC Provider ───────────────────────────────────────────
+        let activeRpc = options.rpc;
+        if (activeRpc.toLowerCase() === 'llamarpc') {
+            activeRpc = 'https://eth.llamarpc.com';
+        } else if (activeRpc.toLowerCase() === 'publicnode') {
+            activeRpc = DEFAULT_FORK_RPC;
+        }
+
         printBanner(target, engineLabel);
 
-        const spinner = ora({ text: 'Forking Ethereum Mainnet locally...', color: 'cyan' }).start();
-        const simulator = new AnvilSimulator(options.rpc);
+        const spinner = ora({ text: `Forking Ethereum Mainnet locally (${activeRpc.split('://')[1]})...`, color: 'cyan' }).start();
+        let simulator = new AnvilSimulator(activeRpc);
         const parser = new TransactionParser();
         const auditor = new SecurityAuditor(aiMode, {
             ollamaModel: aiMode === 'ollama' ? brainModel : undefined,
@@ -256,7 +266,30 @@ program
         });
 
         try {
-            await simulator.startFork();
+            try {
+                await simulator.startFork();
+            } catch (err: any) {
+                spinner.stop();
+                if (activeRpc.includes('llamarpc')) {
+                    console.log(chalk.red(`\n  ✖ LlamaRPC Node Failed: ${err.message}`));
+                    const doFallback = await confirm({
+                        message: '  Would you like to fall back to the default Public Node?',
+                        default: true,
+                    });
+
+                    if (doFallback) {
+                        activeRpc = DEFAULT_FORK_RPC;
+                        simulator = new AnvilSimulator(activeRpc);
+                        spinner.start(`Forking Ethereum Mainnet locally (${activeRpc.split('://')[1]})...`);
+                        await simulator.startFork();
+                    } else {
+                        process.exit(1);
+                    }
+                } else {
+                    throw err;
+                }
+            }
+
             const forkBlock = await simulator.getClient().getBlockNumber();
             spinner.succeed(chalk.greenBright(`Mainnet forked at block #${forkBlock}`));
 
@@ -275,7 +308,7 @@ program
             if (target.length === 66) {
                 spinner.start('Fetching original tx calldata from mainnet...');
                 try {
-                    const liveClient = createPublicClient({ chain: mainnet, transport: http(options.rpc) });
+                    const liveClient = createPublicClient({ chain: mainnet, transport: http(activeRpc) });
                     const origTx = await liveClient.getTransaction({ hash: target as Hex });
                     toAddress = origTx.to as Hex;
                     calldata = origTx.input as Hex;
@@ -298,7 +331,7 @@ program
 
             // Fetch Contract Details (Etherscan / Decompilation)
             spinner.start('Scanning contract logic...');
-            const contractInfo = await explorer.getContractInfo(toAddress, options.rpc);
+            const contractInfo = await explorer.getContractInfo(toAddress, activeRpc);
 
             if (contractInfo.sourceCode) {
                 // We found something (Verified source, Decompiled code, or a Threat Report)
@@ -316,7 +349,7 @@ program
                 contractCode = undefined;
             } else {
                 spinner.info('Contract unverified. Attempting decompilation...');
-                contractCode = await explorer.decompile(toAddress);
+                contractCode = await explorer.decompile(toAddress, contractInfo.bytecode);
                 if (contractCode) {
                     spinner.succeed('Decompiled logic recovered.');
                 } else {
@@ -330,13 +363,38 @@ program
             });
             spinner.succeed(chalk.cyan(`Simulated tx: ${simTxHash}`));
 
-            spinner.start('Extracting EVM trace from local Anvil...');
+            spinner.start('Extracting EVM trace and state diff from local Anvil...');
             const parsed = await parser.parseReceipt(simTxHash);
+
             const rawTrace = await simulator.traceTransaction(simTxHash);
-            const trace = parser.parseTrace(rawTrace);
+            const trace = await parser.parseTrace(rawTrace);
+
+            const rawStateDiff = await simulator.traceStateDiff(simTxHash);
+            const { stateChanges, balanceLoss } = parser.parseStateDiff(rawStateDiff, fromAddress);
+            parsed.stateChanges = stateChanges;
+            parsed.balanceLoss = balanceLoss;
+
             const traceWarns = trace?.suspiciousOps.map(op => `🔴 Suspicious opcode: ${op}`) || [];
+
+            let realEthLoss = (balanceLoss?.amount || BigInt(0)) - (parsed.gasFee || BigInt(0));
+            if (realEthLoss < BigInt(0)) realEthLoss = BigInt(0);
+
+            let expectedValue = BigInt(options.value || '0');
+
+            if (realEthLoss > BigInt(0) && expectedValue === BigInt(0)) {
+                traceWarns.push(`🚨 UNEXPECTED BALANCE DRAIN: Lost ${formatEther(realEthLoss)} ETH to contract (Gas excluded)!`);
+            } else if (realEthLoss > expectedValue) {
+                traceWarns.push(`🚨 UNEXPECTED BALANCE DRAIN: Lost ${formatEther(realEthLoss)} ETH (Only intended to send ${formatEther(expectedValue)} ETH)!`);
+            }
+
+            if (parsed.tokenLosses && parsed.tokenLosses.length > 0) {
+                parsed.tokenLosses.forEach(loss => {
+                    traceWarns.push(`🚨 UNEXPECTED ERC20 DRAIN: Lost ${loss.formatted} unit(s) of Token ${loss.tokenAddress}!`);
+                });
+            }
+
             const allWarnings = [...(parsed.warnings || []), ...traceWarns];
-            spinner.succeed(`Trace done — ${(parsed.logs || []).length} events, ${trace?.calls?.length || 0} sub-calls`);
+            spinner.succeed(`Trace & Diff done — ${(parsed.logs || []).length} events, ${stateChanges.length} state updates`);
 
             console.log(chalk.gray('\n[SIMULATION RESULT]'));
             console.log(`  Status   : ${parsed.status === 'success' ? chalk.green('SUCCESS') : chalk.red('REVERTED')}`);
@@ -348,6 +406,16 @@ program
                     if (log.decoded) Object.entries(log.decoded).forEach(([k, v]) =>
                         console.log(chalk.gray(`      ${k}: ${v}`)));
                 });
+            }
+
+            if (options.verbose) {
+                console.log(chalk.cyan('\n  [Detailed Call Trace]'));
+                console.log(chalk.gray(JSON.stringify(trace, null, 2)));
+
+                if (parsed.stateChanges?.length) {
+                    console.log(chalk.cyan('\n  [State Diffs]'));
+                    console.log(chalk.gray(JSON.stringify(parsed.stateChanges, null, 2)));
+                }
             }
 
             spinner.start(`Analyzing trace with ${engineLabel}...`);

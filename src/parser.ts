@@ -14,6 +14,13 @@ const KNOWN_TOPICS: Record<string, string> = {
 // Suspicious patterns in traces
 const SUSPICIOUS_OPCODES = ['DELEGATECALL', 'SELFDESTRUCT', 'CREATE2'];
 
+export interface StateChange {
+    address: string;
+    balanceChange?: string;
+    nonceChange?: boolean;
+    storageModified?: boolean;
+}
+
 export interface ParsedTransaction {
     hash: Hex;
     to: string;
@@ -21,8 +28,12 @@ export interface ParsedTransaction {
     value: string;
     status: 'success' | 'reverted';
     gasUsed: string;
+    gasFee?: bigint;
     logs: ParsedLog[];
     trace: ParsedTrace | null;
+    stateChanges?: StateChange[];
+    balanceLoss?: { amount: bigint; formatted: string };
+    tokenLosses?: { tokenAddress: string; amount: string; formatted: string }[];
     warnings: string[];
 }
 
@@ -43,8 +54,11 @@ export interface ParsedTrace {
     suspiciousOps: string[];
 }
 
+import axios from 'axios';
+
 export class TransactionParser {
     private client;
+    private signatureCache: Record<string, string> = {};
 
     constructor(rpcUrl: string = LOCAL_ANVIL_RPC) {
         this.client = createPublicClient({
@@ -57,6 +71,8 @@ export class TransactionParser {
         const receipt = await this.client.getTransactionReceipt({ hash: txHash });
         const tx = await this.client.getTransaction({ hash: txHash });
 
+        const tokenLosses: { tokenAddress: string; amount: string; formatted: string }[] = [];
+
         const logs = receipt.logs.map((log): ParsedLog => {
             const topic0 = log.topics[0];
             const eventName = topic0 ? (KNOWN_TOPICS[topic0] || `Unknown(${topic0.slice(0, 10)}...)`) : 'Unknown';
@@ -68,6 +84,21 @@ export class TransactionParser {
                 const to = '0x' + (log.topics[2] || '').slice(26);
                 const amount = BigInt(log.data || '0x0');
                 decoded = { from, to, amount: amount.toString() };
+
+                // Track if the sender is losing ERC20 tokens
+                if (from.toLowerCase() === tx.from.toLowerCase()) {
+                    let decimals = 18; // fallback
+                    // A quick heuristic for USDC/USDT which have 6 decimals
+                    if (log.address.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' ||
+                        log.address.toLowerCase() === '0xdac17f958d2ee523a2206206994597c13d831ec7') {
+                        decimals = 6;
+                    }
+                    tokenLosses.push({
+                        tokenAddress: log.address,
+                        amount: amount.toString(),
+                        formatted: formatUnits(amount, decimals)
+                    });
+                }
             } else if (topic0 === '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925') {
                 const owner = '0x' + (log.topics[1] || '').slice(26);
                 const spender = '0x' + (log.topics[2] || '').slice(26);
@@ -93,36 +124,105 @@ export class TransactionParser {
             value: formatEther(tx.value) + ' ETH',
             status: receipt.status === 'success' ? 'success' : 'reverted',
             gasUsed: receipt.gasUsed.toString(),
+            gasFee: receipt.gasUsed * (receipt.effectiveGasPrice || BigInt(0)),
             logs,
+            tokenLosses,
             warnings,
         };
     }
 
-    parseTrace(rawTrace: any): ParsedTrace | null {
+    async parseTrace(rawTrace: any): Promise<ParsedTrace | null> {
         if (!rawTrace) return null;
 
         const suspiciousOps: string[] = [];
 
-        const extractSuspicious = (traceNode: any): ParsedTrace => {
-            const calls = (traceNode.calls || []).map(extractSuspicious);
+        const extractSuspicious = async (traceNode: any): Promise<ParsedTrace> => {
+            const childPromises = (traceNode.calls || []).map((node: any) => extractSuspicious(node));
+            const calls = await Promise.all(childPromises) as ParsedTrace[];
 
             // Check for suspicious opcodes
             if (traceNode.type && SUSPICIOUS_OPCODES.includes(traceNode.type.toUpperCase())) {
                 suspiciousOps.push(`${traceNode.type} to ${traceNode.to}`);
             }
 
+            let decodedInput = `Raw: ${(traceNode.input || '0x').slice(0, 512)}...`;
+
+            // Auto decoding using 4byte directory
+            if (traceNode.input && traceNode.input.length >= 10 && traceNode.input !== '0x') {
+                const selector = traceNode.input.slice(0, 10);
+                if (!this.signatureCache[selector]) {
+                    try {
+                        const res = await axios.get(`https://www.4byte.directory/api/v1/signatures/?hex_signature=${selector}`);
+                        if (res.data && res.data.results && res.data.results.length > 0) {
+                            this.signatureCache[selector] = res.data.results[0].text_signature;
+                        } else {
+                            this.signatureCache[selector] = `Unknown(${selector})`;
+                        }
+                    } catch (e) {
+                        this.signatureCache[selector] = `Unknown(${selector})`;
+                    }
+                }
+                decodedInput = `${this.signatureCache[selector]} | ${decodedInput}`;
+            }
+
             return {
                 type: traceNode.type || 'CALL',
                 to: traceNode.to || 'unknown',
                 from: traceNode.from || 'unknown',
-                input: (traceNode.input || '0x').slice(0, 64),
-                output: (traceNode.output || '0x').slice(0, 64),
+                input: decodedInput,
+                output: (traceNode.output || '0x').slice(0, 512),
                 calls: calls.length > 0 ? calls : undefined,
                 suspiciousOps,
             };
         };
 
-        return extractSuspicious(rawTrace);
+        return await extractSuspicious(rawTrace);
+    }
+
+    parseStateDiff(rawDiff: any, impersonatedAddress: string): { stateChanges: StateChange[], balanceLoss?: { amount: bigint, formatted: string } } {
+        if (!rawDiff) return { stateChanges: [] };
+
+        const changes: StateChange[] = [];
+        let balanceLoss: { amount: bigint, formatted: string } | undefined;
+
+        const pre = rawDiff.pre || {};
+        const post = rawDiff.post || {};
+
+        const allAddresses = new Set([...Object.keys(pre), ...Object.keys(post)]);
+
+        allAddresses.forEach(address => {
+            const preState = pre[address] || { balance: '0x0', nonce: 0, storage: {} };
+            const postState = post[address] || { balance: '0x0', nonce: 0, storage: {} };
+
+            let balanceChange = undefined;
+            const preBal = BigInt(preState.balance || '0x0');
+            const postBal = BigInt(postState.balance || '0x0');
+
+            if (preBal !== postBal) {
+                const diff = postBal - preBal;
+                const sign = diff > 0n ? '+' : '-';
+                const absDiff = diff > 0n ? diff : -diff;
+                balanceChange = `${sign}${formatEther(absDiff)} ETH`;
+
+                if (address.toLowerCase() === impersonatedAddress.toLowerCase() && diff < 0n) {
+                    balanceLoss = { amount: -diff, formatted: formatEther(-diff) };
+                }
+            }
+
+            const storageModified = JSON.stringify(preState.storage || {}) !== JSON.stringify(postState.storage || {});
+            const nonceChange = preState.nonce !== postState.nonce;
+
+            if (balanceChange || storageModified || nonceChange) {
+                changes.push({
+                    address,
+                    balanceChange,
+                    nonceChange,
+                    storageModified
+                });
+            }
+        });
+
+        return { stateChanges: changes, balanceLoss };
     }
 
     private detectWarningsFromLogs(logs: ParsedLog[], senderAddress: string): string[] {
@@ -164,9 +264,17 @@ export class TransactionParser {
         let codeSection = '';
         if (contractCode) {
             // Include a safe snippet of the code (AI has token limits)
-            const cleanCode = contractCode.slice(0, 5000);
+            const cleanCode = contractCode.slice(0, 25000);
             codeSection = `\n=== TARGET CONTRACT CODE (Logic) ===\n${cleanCode}\n`;
         }
+
+        const stateDiffSummary = (parsed.stateChanges || []).map(sc => {
+            let s = `  - Account: ${sc.address}`;
+            if (sc.balanceChange) s += ` | Balance: ${sc.balanceChange}`;
+            if (sc.nonceChange) s += ` | Nonce changed`;
+            if (sc.storageModified) s += ` | Storage modified`;
+            return s;
+        }).join('\n');
 
         return `
 === TRANSACTION SIMULATION REPORT ===
@@ -176,9 +284,14 @@ To:   ${parsed.to}
 Value: ${parsed.value}
 Status: ${parsed.status?.toUpperCase()}
 Gas Used: ${parsed.gasUsed}
+Native Value Lost: ${parsed.balanceLoss ? parsed.balanceLoss.formatted + ' ETH' : '0 ETH'}
+ERC20 Tokens Lost: ${(parsed.tokenLosses && parsed.tokenLosses.length > 0) ? parsed.tokenLosses.map(t => `${t.formatted} unit(s) of ${t.tokenAddress}`).join(', ') : 'None detected'}
 ${codeSection}
 === EMITTED EVENTS (Logs) ===
 ${logSummary || 'No events emitted.'}
+
+=== STATE DIFFERENCES (Pre/Post) ===
+${stateDiffSummary || 'No state changes.'}
 
 === CALL TRACE (Local Anvil) ===
 ${traceSummary}

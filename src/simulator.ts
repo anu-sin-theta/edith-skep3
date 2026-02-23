@@ -27,8 +27,6 @@ export class AnvilSimulator {
         const args = [
             '--fork-url', this.remoteRpcUrl,
             '--port', '8545',
-            // Instant mining: mine a block whenever a tx arrives
-            '--block-time', '0',
         ];
 
         if (blockNumber) {
@@ -48,12 +46,19 @@ export class AnvilSimulator {
                     reject(new Error(`Failed to start Anvil: ${err.message}. Run: curl -L https://foundry.paradigm.xyz | bash && foundryup`));
                 });
 
+                this.anvilProcess.on('exit', (code) => {
+                    if (!this.ready && code !== null && code !== 0) {
+                        reject(new Error(`Anvil crashed on startup (Exit ${code}). The target RPC might be rate-limiting or down.`));
+                    }
+                });
+
                 // Poll HTTP until Anvil is actually ready to accept connections
                 const poll = async () => {
                     const maxMs = 20_000;
                     const interval = 300;
                     let elapsed = 0;
                     while (elapsed < maxMs) {
+                        if (this.ready) return; // connected or rejected by exit
                         try {
                             const res = await fetch('http://127.0.0.1:8545', {
                                 method: 'POST',
@@ -66,7 +71,7 @@ export class AnvilSimulator {
                         await new Promise(r => setTimeout(r, interval));
                         elapsed += interval;
                     }
-                    reject(new Error('Anvil startup timed out after 20s. Check that port 8545 is free.'));
+                    if (!this.ready) reject(new Error('Anvil startup timed out after 20s. Check that port 8545 is free.'));
                 };
                 poll();
 
@@ -179,6 +184,34 @@ export class AnvilSimulator {
         }
 
         return txHash;
+    }
+
+    async getBalance(address: Hex): Promise<bigint> {
+        const res = await fetch(LOCAL_ANVIL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 7,
+                method: 'eth_getBalance',
+                params: [address, 'latest'],
+            }),
+        });
+        const data: any = await res.json();
+        return BigInt(data.result || '0x0');
+    }
+
+    async traceStateDiff(txHash: Hex): Promise<any> {
+        const res = await fetch(LOCAL_ANVIL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 6,
+                method: 'debug_traceTransaction',
+                params: [txHash, { tracer: 'prestateTracer', tracerConfig: { diffMode: true } }],
+            }),
+        });
+        const data: any = await res.json();
+        return data.result;
     }
 
     // Get the full EVM trace from LOCAL Anvil (this is free — it's your own node)
