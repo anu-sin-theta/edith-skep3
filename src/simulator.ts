@@ -130,17 +130,17 @@ export class AnvilSimulator {
     // Send a raw transaction to local Anvil and mine it
     async simulateTransaction(params: {
         from: Hex;
-        to: Hex;
+        to?: Hex | null;
         data?: Hex;
         value?: bigint;
     }): Promise<Hex> {
         const txParams: any = {
             from: params.from,
-            to: params.to,
             data: params.data || '0x',
             value: params.value ? '0x' + params.value.toString(16) : '0x0',
             gas: '0x' + (3_000_000).toString(16),
         };
+        if (params.to) txParams.to = params.to;
 
         const sendRes = await fetch(LOCAL_ANVIL_RPC, {
             method: 'POST',

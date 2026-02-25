@@ -299,7 +299,7 @@ program
             await simulator.setBalance(fromAddress);
             spinner.succeed(`Impersonating: ${fromAddress}`);
 
-            let toAddress: Hex;
+            let toAddress: Hex | null = null;
             let calldata: Hex | undefined;
             let contractCode: string | undefined;
 
@@ -310,9 +310,9 @@ program
                 try {
                     const liveClient = createPublicClient({ chain: mainnet, transport: http(activeRpc) });
                     const origTx = await liveClient.getTransaction({ hash: target as Hex });
-                    toAddress = origTx.to as Hex;
+                    toAddress = origTx.to as Hex | null;
                     calldata = origTx.input as Hex;
-                    spinner.succeed(`Original tx found → ${toAddress}`);
+                    spinner.succeed(`Original tx found → ${toAddress || 'Contract Creation'}`);
                 } catch {
                     spinner.fail('Transaction not found on mainnet.');
                     await simulator.stop(); process.exit(1);
@@ -331,7 +331,7 @@ program
 
             // Fetch Contract Details (Etherscan / Decompilation)
             spinner.start('Scanning contract logic...');
-            const contractInfo = await explorer.getContractInfo(toAddress, activeRpc);
+            const contractInfo = toAddress ? await explorer.getContractInfo(toAddress, activeRpc) : { isVerified: false, bytecode: '0x', name: undefined, sourceCode: null };
 
             if (contractInfo.sourceCode) {
                 // We found something (Verified source, Decompiled code, or a Threat Report)
@@ -349,7 +349,7 @@ program
                 contractCode = undefined;
             } else {
                 spinner.info('Contract unverified. Attempting decompilation...');
-                contractCode = await explorer.decompile(toAddress, contractInfo.bytecode);
+                contractCode = toAddress ? await explorer.decompile(toAddress, contractInfo.bytecode) : undefined;
                 if (contractCode) {
                     spinner.succeed('Decompiled logic recovered.');
                 } else {

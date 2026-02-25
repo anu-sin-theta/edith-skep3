@@ -16,7 +16,8 @@ const THREATS_PATH = path.join(CONFIG_DIR, 'threats.json');
 // NO SEED DATA - EMPTY DATABASE
 const SEED_THREATS: Record<string, Threat> = {};
 
-export function getThreat(address: string): Threat | undefined {
+export function getThreat(address: string | null): Threat | undefined {
+    if (!address) return undefined;
     let threats = SEED_THREATS;
 
     try {
@@ -30,6 +31,7 @@ export function getThreat(address: string): Threat | undefined {
 }
 
 export function addThreat(threat: Threat) {
+    if (!threat || !threat.address) return;
     try {
         if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
         let current = {};
