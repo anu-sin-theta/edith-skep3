@@ -1,20 +1,57 @@
 {
-  "name": "edith-sentinel",
+  "name": "edith-skep3",
   "version": "2.4.0",
+  "description": "Local-first Web3 wallet security CLI. Intercepts transactions, forks the EVM with Foundry Anvil, simulates execution, and runs on-device AI threat analysis via Ollama — all without sending a single byte to the cloud.",
   "main": "dist/index.js",
   "bin": {
     "edith": "./dist/index.js"
   },
   "type": "module",
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
     "start": "node dist/index.js",
-    "dev": "npm run build && node dist/index.js"
+    "dev": "npm run build && node dist/index.js",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "web3",
+    "ethereum",
+    "blockchain",
+    "security",
+    "wallet",
+    "transaction",
+    "simulation",
+    "evm",
+    "anvil",
+    "foundry",
+    "ollama",
+    "ai",
+    "drainer",
+    "honeypot",
+    "cli",
+    "proxy",
+    "skep3",
+    "edith"
+  ],
+  "author": "Anubhav Singh <anubhav@anufied.me> (https://anufied.me)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skep3/edith-skep3-cli.git"
+  },
+  "homepage": "https://skep3.dev",
+  "bugs": {
+    "url": "https://github.com/skep3/edith-skep3-cli/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "axios": "^1.13.5",
     "chalk": "^5.6.2",

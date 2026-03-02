@@ -1,0 +1,28 @@
+# Source — not needed, dist/ is what gets shipped
+src/
+tsconfig.json
+
+# Dev & IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Logs
+*.log
+anvil.log
+
+# Test / CI (none yet, but for future-proofing)
+__tests__/
+*.test.ts
+*.spec.ts
+
+# Git
+.git/
+.gitignore
+
+# Env
+.env
+*.env
+
+# Build tooling
+node_modules/
