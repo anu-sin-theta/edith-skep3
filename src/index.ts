@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json');
 import chalk, { type ChalkInstance } from 'chalk';
 import ora from 'ora';
 import { AnvilSimulator, DEFAULT_FORK_RPC } from './simulator.js';
@@ -114,7 +117,7 @@ function printSplash() {
 program
     .name('edith')
     .description('Edith Sentinel — AI-Powered Web3 Transaction Firewall')
-    .version('2.2.0')
+    .version(version)
     .action(() => {
         // No subcommand given — show splash instead of error
         printSplash();
