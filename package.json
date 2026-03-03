@@ -1,6 +1,6 @@
 {
   "name": "edith-skep3",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Local-first Web3 wallet security CLI. Intercepts transactions, forks the EVM with Foundry Anvil, simulates execution, and runs on-device AI threat analysis via Ollama — all without sending a single byte to the cloud.",
   "main": "dist/index.js",
   "bin": {
@@ -43,14 +43,14 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/skep3/edith-skep3-cli.git"
+    "url": "git+https://github.com/anu-sin-theta/edith-skep3.git"
   },
   "publishConfig": {
     "provenance": true
   },
-  "homepage": "https://skep3.dev",
+  "homepage": "https://skep3.anufied.pro",
   "bugs": {
-    "url": "https://github.com/skep3/edith-skep3-cli/issues"
+    "url": "https://github.com/anu-sin-theta/edith-skep3/issues"
   },
   "engines": {
     "node": ">=18.0.0"
