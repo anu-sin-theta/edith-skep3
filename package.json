@@ -43,7 +43,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/skep3/edith-skep3-cli.git"
+    "url": "git+https://github.com/skep3/edith-skep3-cli.git"
+  },
+  "publishConfig": {
+    "provenance": true
   },
   "homepage": "https://skep3.dev",
   "bugs": {
