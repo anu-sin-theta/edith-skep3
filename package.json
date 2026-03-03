@@ -1,6 +1,6 @@
 {
   "name": "edith-skep3",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "Local-first Web3 wallet security CLI. Intercepts transactions, forks the EVM with Foundry Anvil, simulates execution, and runs on-device AI threat analysis via Ollama — all without sending a single byte to the cloud.",
   "main": "dist/index.js",
   "bin": {
