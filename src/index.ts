@@ -23,6 +23,7 @@ import { type Hex, formatEther } from 'viem';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { ContractExplorer } from './explorer.js';
+import { checkAndInstallDependencies } from './installer.js';
 
 const EVM_PUBLIC_RPCS = [
     'https://ethereum.publicnode.com',
@@ -201,6 +202,8 @@ program
     .option('--skip-blocks <blocks>', 'Advance EVM block number before simulation', '0')
     .option('--bundle <file>', 'Simulate multiple sequential transactions from a JSON file (fixes single-tx myopia)')
     .action(async (target: string | undefined, options) => {
+        // ── Auto-Install System Dependencies First ─────────────────────────
+        await checkAndInstallDependencies();
 
         // ── Resolve AI mode ────────────────────────────────────────────────
         let aiMode: 'ollama' | 'remote' = 'ollama';
