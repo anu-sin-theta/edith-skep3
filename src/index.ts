@@ -76,11 +76,11 @@ const program = new Command();
 function printBanner(target: string, engine: string) {
     console.log(chalk.bold.hex('#00FFAA')(`
   ╔══════════════════════════════════════════════════════╗
-  ║   🛡️  EDITH SKEP3  ·  Transaction Firewall         ║
-  ║   Privacy-First · Local EVM · Advanced Analysis      ║
+    🛡️  EDITH SKEP3  ·  Transaction Firewall        
+    Privacy-First · Local EVM · Advanced Analysis      
   ╠══════════════════════════════════════════════════════╣
-  ║   Target : ${target.slice(0, 42).padEnd(42)}         ║
-  ║   Brain  : ${engine.slice(0, 42).padEnd(42)}         ║
+    Target : ${target.slice(0, 42).padEnd(42)}         
+    Brain  : ${engine.slice(0, 42).padEnd(42)}         
   ╚══════════════════════════════════════════════════════╝
 `));
 }
