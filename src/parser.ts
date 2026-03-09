@@ -9,6 +9,9 @@ const KNOWN_TOPICS: Record<string, string> = {
     '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925': 'Approval(address,address,uint256)',
     '0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c': 'Deposit(address,uint256)',
     '0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65': 'Withdrawal(address,uint256)',
+    '0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31': 'ApprovalForAll(address,address,bool)',
+    '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62': 'TransferSingle(address,address,address,uint256,uint256)',
+    '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb': 'TransferBatch(address,address,address,uint256[],uint256[])'
 };
 
 // Suspicious patterns in traces
@@ -82,29 +85,82 @@ export class TransactionParser {
             if (topic0 === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
                 const from = '0x' + (log.topics[1] || '').slice(26);
                 const to = '0x' + (log.topics[2] || '').slice(26);
-                const amount = BigInt(log.data || '0x0');
-                decoded = { from, to, amount: amount.toString() };
 
-                // Track if the sender is losing ERC20 tokens
-                if (from.toLowerCase() === tx.from.toLowerCase()) {
-                    let decimals = 18; // fallback
-                    // A quick heuristic for USDC/USDT which have 6 decimals
-                    if (log.address.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' ||
-                        log.address.toLowerCase() === '0xdac17f958d2ee523a2206206994597c13d831ec7') {
-                        decimals = 6;
+                if (log.topics.length === 4) {
+                    const tokenId = BigInt(log.topics[3] || '0x0').toString();
+                    decoded = { from, to, tokenId };
+                    if (from.toLowerCase() === tx.from.toLowerCase()) {
+                        tokenLosses.push({
+                            tokenAddress: log.address,
+                            amount: '1',
+                            formatted: `NFT ID ${tokenId}`
+                        });
                     }
-                    tokenLosses.push({
-                        tokenAddress: log.address,
-                        amount: amount.toString(),
-                        formatted: formatUnits(amount, decimals)
-                    });
+                } else {
+                    const amount = BigInt(log.data || '0x0');
+                    decoded = { from, to, amount: amount.toString() };
+
+                    // Track if the sender is losing ERC20 tokens
+                    if (from.toLowerCase() === tx.from.toLowerCase()) {
+                        let decimals = 18; // fallback
+                        // A quick heuristic for USDC/USDT which have 6 decimals
+                        if (log.address.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' ||
+                            log.address.toLowerCase() === '0xdac17f958d2ee523a2206206994597c13d831ec7') {
+                            decimals = 6;
+                        }
+                        tokenLosses.push({
+                            tokenAddress: log.address,
+                            amount: amount.toString(),
+                            formatted: formatUnits(amount, decimals)
+                        });
+                    }
                 }
             } else if (topic0 === '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925') {
                 const owner = '0x' + (log.topics[1] || '').slice(26);
                 const spender = '0x' + (log.topics[2] || '').slice(26);
-                const amount = BigInt(log.data || '0x0');
-                const isInfinite = amount > BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-                decoded = { owner, spender, amount: isInfinite ? 'INFINITE (Max Uint256)' : amount.toString() };
+
+                if (log.topics.length === 4) {
+                    const tokenId = BigInt(log.topics[3] || '0x0').toString();
+                    decoded = { owner, spender, tokenId };
+                } else {
+                    const amount = BigInt(log.data || '0x0');
+                    const isInfinite = amount > BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+                    decoded = { owner, spender, amount: isInfinite ? 'INFINITE (Max Uint256)' : amount.toString() };
+                }
+            } else if (topic0 === '0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31') {
+                const owner = '0x' + (log.topics[1] || '').slice(26);
+                const operator = '0x' + (log.topics[2] || '').slice(26);
+                const approved = BigInt(log.data || '0x0') !== 0n;
+                decoded = { owner, operator, approved: approved ? 'true' : 'false' };
+            } else if (topic0 === '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62') {
+                const operator = '0x' + (log.topics[1] || '').slice(26);
+                const from = '0x' + (log.topics[2] || '').slice(26);
+                const to = '0x' + (log.topics[3] || '').slice(26);
+                const idHex = log.data.slice(0, 66);
+                const valueHex = '0x' + log.data.slice(66);
+                const id = BigInt(idHex || '0x0').toString();
+                const value = BigInt(valueHex || '0x0').toString();
+                decoded = { from, to, operator, id, value };
+
+                if (from.toLowerCase() === tx.from.toLowerCase()) {
+                    tokenLosses.push({
+                        tokenAddress: log.address,
+                        amount: value,
+                        formatted: `${value} ERC-1155 NFT(s) ID ${id}`
+                    });
+                }
+            } else if (topic0 === '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb') {
+                const operator = '0x' + (log.topics[1] || '').slice(26);
+                const from = '0x' + (log.topics[2] || '').slice(26);
+                const to = '0x' + (log.topics[3] || '').slice(26);
+                decoded = { from, to, operator, note: 'Batch transfer decoded info omitted' };
+                if (from.toLowerCase() === tx.from.toLowerCase()) {
+                    tokenLosses.push({
+                        tokenAddress: log.address,
+                        amount: 'unknown',
+                        formatted: `Multiple ERC-1155 NFTs`
+                    });
+                }
             }
 
             return {
@@ -135,14 +191,40 @@ export class TransactionParser {
         if (!rawTrace) return null;
 
         const suspiciousOps: string[] = [];
+        const callStack = new Set<string>();
 
-        const extractSuspicious = async (traceNode: any): Promise<ParsedTrace> => {
-            const childPromises = (traceNode.calls || []).map((node: any) => extractSuspicious(node));
+        const extractSuspicious = async (traceNode: any, parentTraceNode?: any): Promise<ParsedTrace> => {
+            const nodeTo = traceNode.to?.toLowerCase() || '';
+            if (nodeTo && callStack.has(nodeTo)) {
+                suspiciousOps.push(`REENTRANCY LOOP detected at ${traceNode.to}`);
+            }
+            if (nodeTo) {
+                callStack.add(nodeTo);
+            }
+
+            const childPromises = (traceNode.calls || []).map((node: any) => extractSuspicious(node, traceNode));
             const calls = await Promise.all(childPromises) as ParsedTrace[];
 
+            if (nodeTo) {
+                callStack.delete(nodeTo);
+            }
+
             // Check for suspicious opcodes
-            if (traceNode.type && SUSPICIOUS_OPCODES.includes(traceNode.type.toUpperCase())) {
-                suspiciousOps.push(`${traceNode.type} to ${traceNode.to}`);
+            if (traceNode.type) {
+                const typeUpper = traceNode.type.toUpperCase();
+                if (SUSPICIOUS_OPCODES.includes(typeUpper)) {
+                    if (typeUpper === 'DELEGATECALL') {
+                        // Avoid false positives on standard forwarding proxies
+                        const isStandardProxy = parentTraceNode &&
+                            parentTraceNode.input === traceNode.input &&
+                            parentTraceNode.type !== 'DELEGATECALL';
+                        if (!isStandardProxy) {
+                            suspiciousOps.push(`${traceNode.type} to ${traceNode.to}`);
+                        }
+                    } else {
+                        suspiciousOps.push(`${traceNode.type} to ${traceNode.to}`);
+                    }
+                }
             }
 
             let decodedInput = `Raw: ${(traceNode.input || '0x').slice(0, 512)}...`;
@@ -176,7 +258,7 @@ export class TransactionParser {
             };
         };
 
-        return await extractSuspicious(rawTrace);
+        return await extractSuspicious(rawTrace, null);
     }
 
     parseStateDiff(rawDiff: any, impersonatedAddress: string): { stateChanges: StateChange[], balanceLoss?: { amount: bigint, formatted: string } } {
@@ -229,9 +311,13 @@ export class TransactionParser {
         const warnings: string[] = [];
 
         for (const log of logs) {
-            // Infinite approval detection
+            // Infinite approval detection or ApprovalForAll
             if (log.eventName.startsWith('Approval') && log.decoded?.amount === 'INFINITE (Max Uint256)') {
                 warnings.push(`⚠️  INFINITE APPROVAL granted to ${log.decoded.spender} for token ${log.address}`);
+            } else if (log.eventName === 'ApprovalForAll(address,address,bool)' && log.decoded?.approved === 'true') {
+                warnings.push(`⚠️  APPROVAL FOR ALL (NFTs) granted to ${log.decoded.operator} on collection ${log.address}`);
+            } else if (log.eventName === 'Approval(address,address,uint256)' && log.decoded?.tokenId) {
+                warnings.push(`⚠️  NFT APPROVAL granted to ${log.decoded.spender} for token ID ${log.decoded.tokenId} on ${log.address}`);
             }
 
             // Transfer to unknown address (not sender)

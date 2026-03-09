@@ -1,9 +1,12 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { createPublicClient, createWalletClient, http, type Hex, encodeFunctionData, parseAbi } from 'viem';
 import { mainnet } from 'viem/chains';
+import { Connection, Transaction, VersionedTransaction, SimulatedTransactionResponse, PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 // Public free RPC - no API key required, works for forking
 export const DEFAULT_FORK_RPC = 'https://ethereum.publicnode.com';
+export const DEFAULT_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const LOCAL_ANVIL_RPC = 'http://127.0.0.1:8545';
 
 export interface SimulationResult {
@@ -127,6 +130,41 @@ export class AnvilSimulator {
         });
     }
 
+    // Advance block timestamp (fixes point-in-time/frontrunning limits)
+    async advanceTime(seconds: number): Promise<void> {
+        await fetch(LOCAL_ANVIL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 11,
+                method: 'evm_increaseTime',
+                params: [seconds],
+            }),
+        });
+        await fetch(LOCAL_ANVIL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 12,
+                method: 'evm_mine',
+                params: [],
+            }),
+        });
+    }
+
+    // Advance block height
+    async advanceBlocks(blocks: number): Promise<void> {
+        await fetch(LOCAL_ANVIL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 13,
+                method: 'anvil_mine',
+                params: ['0x' + blocks.toString(16), '0x0'],
+            }),
+        });
+    }
+
     // Send a raw transaction to local Anvil and mine it
     async simulateTransaction(params: {
         from: Hex;
@@ -242,6 +280,40 @@ export class AnvilSimulator {
         }
         return data.result;
     }
+
+    // ─── SOLANA SIMULATION ENGINE ─────────────────────────────────────────────
+
+    async simulateSolanaTransaction(base64Tx: string, rpc: string = DEFAULT_SOLANA_RPC): Promise<any> {
+        const connection = new Connection(rpc, 'confirmed');
+
+        let transaction: Transaction | VersionedTransaction;
+        try {
+            const buf = Buffer.from(base64Tx, 'base64');
+            transaction = VersionedTransaction.deserialize(buf);
+        } catch (e) {
+            try {
+                const buf = Buffer.from(base64Tx, 'base64');
+                transaction = Transaction.from(buf);
+            } catch (e2) {
+                // Not base64, try bs58
+                try {
+                    const decoded = bs58.decode(base64Tx);
+                    transaction = VersionedTransaction.deserialize(decoded);
+                } catch (e3) {
+                    throw new Error("Failed to parse Solana transaction. Must be base64 or base58 encoded binary.");
+                }
+            }
+        }
+
+        const simResult = await connection.simulateTransaction(transaction as any, {
+            replaceRecentBlockhash: true,
+            sigVerify: false,
+        });
+
+        return simResult.value;
+    }
+
+    // ─── END SOLANA ENGINE ────────────────────────────────────────────────────
 
     async stop(): Promise<void> {
         if (this.anvilProcess) {

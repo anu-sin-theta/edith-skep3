@@ -1,9 +1,9 @@
 
 <div align="center">
 
-<img src="assets/banner.png" alt="Edith Sentinel — Privacy-First AI-Powered Web3 Transaction Firewall" width="100%" />
+<img src="assets/banner.png" alt="Skep3 — Privacy-First AI-Powered Web3 Transaction Firewall" width="100%" />
 
-# 🛡️ EDITH SKEP3
+# EDITH SKEP3
 
 ### *The Privacy-First, AI-Powered Web3 Transaction Firewall*
 
@@ -35,16 +35,16 @@ Every year, billions of dollars are drained from crypto wallets through:
 
 ---
 
-## ✅ The Solution
+## The Solution
 
 **EDITH Sentinel** intercepts the transaction *before you sign it*, runs it in a sandboxed local Ethereum fork, and uses a local AI to analyze exactly what happened — what tokens moved, what approvals were granted, what hidden sub-calls were made — and gives you a plain-English verdict.
 
 ```
                     ┌────────── YOUR MACHINE ONLY ───────────────┐
-                    │                                             │
-  Suspicious   ──►  │  Fork Mainnet   →   Simulate   →   AI      │  ──►  VERDICT
-  Transaction       │  (Anvil/Rust)       (EVM)          (Ollama)│       SAFE / RISKY
-                    │                                             │       / CRITICAL
+                    │                                            
+  Suspicious   ──►  │  Fork Mainnet   →   Simulate   →   AI        ──►  VERDICT
+  Transaction       │  (Anvil/Rust)       (EVM)          (Ollama)       SAFE / RISKY
+                    │                                                   / CRITICAL
                     └─────────────────────────────────────────────┘
                     
               Zero data leaves your machine. No cloud. No API keys.
@@ -52,7 +52,7 @@ Every year, billions of dollars are drained from crypto wallets through:
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐

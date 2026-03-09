@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
-import chalk, { type ChalkInstance } from 'chalk';
+import chalk, { type Chalk } from 'chalk';
 import ora from 'ora';
 import { AnvilSimulator, DEFAULT_FORK_RPC } from './simulator.js';
 import { TransactionParser } from './parser.js';
@@ -24,6 +24,52 @@ import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { ContractExplorer } from './explorer.js';
 
+const EVM_PUBLIC_RPCS = [
+    'https://ethereum.publicnode.com',
+    'https://base.publicnode.com',
+    'https://arbitrum.publicnode.com',
+    'https://optimism.publicnode.com',
+    'https://bsc.publicnode.com',
+    'https://polygon.publicnode.com',
+];
+
+async function autoDiscoverEvmRpc(targetStr: string): Promise<string | null> {
+    if (targetStr.length === 66) {
+        // Fast-ping all chains for tx hash
+        const checks = EVM_PUBLIC_RPCS.map(async (rpc) => {
+            try {
+                const res = await fetch(rpc, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionByHash', params: [targetStr] })
+                });
+                const data: any = await res.json();
+                if (data.result) return rpc;
+            } catch { }
+            return null;
+        });
+        const results = await Promise.all(checks);
+        return results.find(r => r !== null) || null;
+    } else if (targetStr.length === 42) {
+        // Try finding contract code (verified deploy) on chains
+        const checks = EVM_PUBLIC_RPCS.map(async (rpc) => {
+            try {
+                const res = await fetch(rpc, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getCode', params: [targetStr, 'latest'] })
+                });
+                const data: any = await res.json();
+                if (data.result && data.result !== '0x' && data.result !== '0x0') return rpc;
+            } catch { }
+            return null;
+        });
+        const results = await Promise.all(checks);
+        return results.find(r => r !== null) || null;
+    }
+    return null;
+}
+
 const program = new Command();
 
 // ─── Banner ───────────────────────────────────────────────────────────────────
@@ -41,7 +87,7 @@ function printBanner(target: string, engine: string) {
 
 // ─── Verdict Renderer ─────────────────────────────────────────────────────────
 function printVerdict(verdict: Verdict, reasoning: string, warnings: string[], engine: string) {
-    const colors: Record<Verdict, ChalkInstance> = {
+    const colors: Record<Verdict, Chalk> = {
         SAFE: chalk.bold.greenBright,
         RISKY: chalk.bold.yellow,
         CRITICAL: chalk.bold.redBright,
@@ -138,8 +184,9 @@ program
     edith scan 0xContract --brain            (use cloud AI)
     edith scan 0xContract --ollama           (force local Ollama)
     edith scan 0xContract --brain --rpc https://your-rpc.com
+    edith scan "base58string..." --solana    (Simulate Solana tx)
   `)
-    .argument('<target>', 'Transaction hash (66 chars) or contract address (42 chars)')
+    .argument('[target]', 'Transaction hash/address (ETH) or Base58 encoded tx (Solana)')
     .option('--method <sig>', 'Function signature, e.g. "claimAirdrop()"', 'fallback()')
     .option('--from <address>', 'Wallet to impersonate', '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266')
     .option('--value <wei>', 'ETH value to send in wei', '0')
@@ -149,7 +196,11 @@ program
     .option('--ollama', 'Force local Ollama AI (overrides saved brain preference)')
     .option('--model <name>', 'Override AI model name')
     .option('-v, --verbose', 'Show detailed execution trace logs in the console')
-    .action(async (target: string, options) => {
+    .option('--solana', 'Switch context to target Solana (base58 serialized tx)')
+    .option('--skip-time <seconds>', 'Advance EVM time before simulation', '0')
+    .option('--skip-blocks <blocks>', 'Advance EVM block number before simulation', '0')
+    .option('--bundle <file>', 'Simulate multiple sequential transactions from a JSON file (fixes single-tx myopia)')
+    .action(async (target: string | undefined, options) => {
 
         // ── Resolve AI mode ────────────────────────────────────────────────
         let aiMode: 'ollama' | 'remote' = 'ollama';
@@ -248,17 +299,36 @@ program
             ? `${brainProvider.label} → ${brainModel}`
             : `Ollama → ${brainModel}`;
 
-        // ── Resolve RPC Provider ───────────────────────────────────────────
-        let activeRpc = options.rpc;
-        if (activeRpc.toLowerCase() === 'llamarpc') {
-            activeRpc = 'https://eth.llamarpc.com';
-        } else if (activeRpc.toLowerCase() === 'publicnode') {
-            activeRpc = DEFAULT_FORK_RPC;
+        let isSolana = options.solana === true;
+
+        if (target && !target.startsWith('0x') && target.length > 50) {
+            isSolana = true; // Auto-detect Base58/Base64 Solana payload
         }
 
-        printBanner(target, engineLabel);
+        let activeRpc = options.rpc;
+        let chainDetectedLabel = '';
 
-        const spinner = ora({ text: `Forking Ethereum Mainnet locally (${activeRpc.split('://')[1]})...`, color: 'cyan' }).start();
+        if (isSolana && activeRpc === DEFAULT_FORK_RPC) {
+            activeRpc = 'https://api.mainnet-beta.solana.com';
+        } else if (activeRpc.toLowerCase() === 'llamarpc') {
+            activeRpc = 'https://eth.llamarpc.com';
+        } else if (activeRpc === DEFAULT_FORK_RPC && target && !isSolana) {
+            // Attempt auto chain discovery for EVM 
+            const spinner = ora({ text: 'Auto-discovering EVM chain...', color: 'cyan' }).start();
+            const discoveredRpc = await autoDiscoverEvmRpc(target);
+            if (discoveredRpc) {
+                activeRpc = discoveredRpc;
+                const domain = new URL(activeRpc).hostname;
+                chainDetectedLabel = chalk.green(` (Auto-detected: ${domain})`);
+                spinner.succeed(`Located target on ${domain}`);
+            } else {
+                activeRpc = DEFAULT_FORK_RPC;
+                spinner.stop();
+            }
+        }
+
+        printBanner(target || 'Bundle Simulation', engineLabel);
+
         let simulator = new AnvilSimulator(activeRpc);
         const parser = new TransactionParser();
         const auditor = new SecurityAuditor(aiMode, {
@@ -267,6 +337,43 @@ program
             apiKey: aiMode === 'remote' ? brainApiKey : undefined,
             remoteModel: aiMode === 'remote' ? brainModel : undefined,
         });
+
+        if (isSolana && target) {
+            const spinner = ora({ text: `Simulating Solana transaction remotely via ${activeRpc.split('://')[1]}...`, color: 'cyan' }).start();
+            try {
+                const solResult = await simulator.simulateSolanaTransaction(target, activeRpc);
+                spinner.succeed(solResult.err ? chalk.red(`Solana transaction will FAIL!`) : chalk.greenBright(`Solana transaction simulated successfully!`));
+
+                const simLogs = solResult.logs || [];
+                const solUnitsConsumed = solResult.unitsConsumed ? solResult.unitsConsumed : 0;
+
+                console.log(chalk.gray('\n[SOLANA SIMULATION RESULT]'));
+                console.log(`  Status   : ${solResult.err ? chalk.red(JSON.stringify(solResult.err)) : chalk.green('SUCCESS')}`);
+                console.log(`  Compute  : ${chalk.white(solUnitsConsumed)} CUs`);
+
+                let reportBuilder = `=== SOLANA SIMULATION REPORT ===\nEngine: Solana\nStatus: ${solResult.err ? 'REVERTED' : 'SUCCESS'}\nCompute: ${solUnitsConsumed}\n\n=== EMITTED LOGS ===\n`;
+                if (simLogs.length) {
+                    console.log(chalk.cyan('\n  [Detailed Logs]'));
+                    simLogs.forEach((l: string) => {
+                        console.log(chalk.gray(`    • ${l}`));
+                        reportBuilder += `- ${l}\n`;
+                    });
+                } else {
+                    reportBuilder += "No logs emitted.\n";
+                }
+
+                spinner.start(`Analyzing Solana logs with ${engineLabel}...`);
+                const auditResult = await auditor.audit(reportBuilder);
+                spinner.stop();
+                printVerdict(auditResult.verdict, auditResult.reasoning, [], auditResult.engine);
+                process.exit(0);
+            } catch (e: any) {
+                spinner.fail(`Failed to simulate Solana tx: ${e.message}`);
+                process.exit(1);
+            }
+        }
+
+        const spinner = ora({ text: `Forking Ethereum Mainnet locally (${activeRpc.split('://')[1]})...`, color: 'cyan' }).start();
 
         try {
             try {
@@ -302,109 +409,147 @@ program
             await simulator.setBalance(fromAddress);
             spinner.succeed(`Impersonating: ${fromAddress}`);
 
-            let toAddress: Hex | null = null;
-            let calldata: Hex | undefined;
-            let contractCode: string | undefined;
-
             const explorer = new ContractExplorer(process.env.ETHERSCAN_API_KEY || '');
+            const fs = await import('fs');
 
-            if (target.length === 66) {
-                spinner.start('Fetching original tx calldata from mainnet...');
-                try {
-                    const liveClient = createPublicClient({ chain: mainnet, transport: http(activeRpc) });
-                    const origTx = await liveClient.getTransaction({ hash: target as Hex });
-                    toAddress = origTx.to as Hex | null;
-                    calldata = origTx.input as Hex;
-                    spinner.succeed(`Original tx found → ${toAddress || 'Contract Creation'}`);
-                } catch {
-                    spinner.fail('Transaction not found on mainnet.');
-                    await simulator.stop(); process.exit(1);
+            let txsToRun: any[] = [];
+
+            if (options.bundle) {
+                let bundleStr = options.bundle;
+                if (fs.existsSync(bundleStr)) {
+                    bundleStr = fs.readFileSync(bundleStr, 'utf-8');
                 }
+                txsToRun = JSON.parse(bundleStr);
+            } else if (target) {
+                txsToRun = [{ target, method: options.method, data: options.data, value: options.value, skipTime: options.skipTime, skipBlocks: options.skipBlocks }];
             } else {
-                toAddress = target as Hex;
-                calldata = options.data as Hex | undefined;
-                if (!calldata && options.method !== 'fallback()') {
-                    const { keccak256, toBytes } = await import('viem');
-                    const selector = keccak256(toBytes(options.method)).slice(0, 10);
-                    calldata = selector as Hex;
-                }
-                const methodLabel = options.method === 'fallback()' ? '(Plain/Fallback)' : options.method;
-                spinner.succeed(`Simulating → ${toAddress}  ${methodLabel}`);
+                throw new Error("Must specify [target] or --bundle");
             }
 
-            // Fetch Contract Details (Etherscan / Decompilation)
+            // Resolve final target for contract logic scanning
+            const lastTx = txsToRun[txsToRun.length - 1];
+            let finalTargetAddr = (lastTx.target || lastTx.to) as string;
+            if (finalTargetAddr && finalTargetAddr.length === 66) {
+                spinner.start('Scanning mainnet for final target tx...');
+                try {
+                    const liveClient = createPublicClient({ chain: mainnet, transport: http(activeRpc) });
+                    const origTx = await liveClient.getTransaction({ hash: finalTargetAddr as Hex });
+                    finalTargetAddr = origTx.to as string;
+                    spinner.succeed(`Target resolved to ${finalTargetAddr || 'Contract Creation'}`);
+                } catch (e) {
+                    spinner.succeed(`Could not fetch mainnet tx hash for final target.`);
+                }
+            }
+
+            let contractCode: string | undefined;
             spinner.start('Scanning contract logic...');
-            const contractInfo = toAddress ? await explorer.getContractInfo(toAddress, activeRpc) : { isVerified: false, bytecode: '0x', name: undefined, sourceCode: null };
+            const contractInfo = finalTargetAddr ? await explorer.getContractInfo(finalTargetAddr as Hex, activeRpc) : { isVerified: false, bytecode: '0x', name: undefined, sourceCode: null };
 
             if (contractInfo.sourceCode) {
-                // We found something (Verified source, Decompiled code, or a Threat Report)
                 contractCode = contractInfo.sourceCode;
                 if (contractInfo.isVerified) {
-                    spinner.succeed(contractInfo.name?.includes('🚨')
-                        ? chalk.redBright.bold(contractInfo.name)
-                        : `Verified source found: ${contractInfo.name || 'Unknown'}`);
+                    spinner.succeed(contractInfo.name?.includes('🚨') ? chalk.redBright.bold(contractInfo.name) : `Verified source found: ${contractInfo.name || 'Unknown'}`);
                 } else {
                     spinner.succeed('Decompiled logic recovered.');
                 }
             } else if (!contractInfo.bytecode || contractInfo.bytecode === '0x' || contractInfo.bytecode === '0x0') {
                 spinner.warn(chalk.yellow(`Target contract not found on this chain.`));
-                console.log(chalk.gray(`  (Wait! If this is BSC/Polygon/etc, use: --rpc <url>)\n`));
                 contractCode = undefined;
             } else {
                 spinner.info('Contract unverified. Attempting decompilation...');
-                contractCode = toAddress ? await explorer.decompile(toAddress, contractInfo.bytecode) : undefined;
-                if (contractCode) {
-                    spinner.succeed('Decompiled logic recovered.');
-                } else {
-                    spinner.warn('No readable code found. AI will audit raw trace only.');
+                contractCode = finalTargetAddr ? await explorer.decompile(finalTargetAddr as Hex, contractInfo.bytecode) : undefined;
+                if (contractCode) spinner.succeed('Decompiled logic recovered.');
+                else spinner.warn('No readable code found. AI will audit raw trace only.');
+            }
+
+            spinner.start(`Executing simulation sequence (${txsToRun.length} txs) on local fork...`);
+
+            let finalParsed: any = null;
+            let finalTrace: any = null;
+            let bundleWarnings: string[] = [];
+
+            for (let i = 0; i < txsToRun.length; i++) {
+                const txConf = txsToRun[i];
+                let txTo: Hex | null = null;
+                let txData: Hex | undefined = txConf.data as Hex;
+                const tgt = txConf.target || txConf.to;
+
+                if (tgt && tgt.length === 66) {
+                    const liveClient = createPublicClient({ chain: mainnet, transport: http(activeRpc) });
+                    const origTx = await liveClient.getTransaction({ hash: tgt as Hex });
+                    txTo = origTx.to as Hex | null;
+                    if (!txData) txData = origTx.input as Hex;
+                } else if (tgt && tgt.length === 42) {
+                    txTo = tgt as Hex;
+                    if (!txData && txConf.method && txConf.method !== 'fallback()') {
+                        const { keccak256, toBytes } = await import('viem');
+                        const selector = keccak256(toBytes(txConf.method)).slice(0, 10);
+                        txData = selector as Hex;
+                    }
+                }
+
+                if (txConf.skipTime && Number(txConf.skipTime) > 0) {
+                    spinner.text = `Advancing time by ${txConf.skipTime}s...`;
+                    await simulator.advanceTime(Number(txConf.skipTime));
+                }
+                if (txConf.skipBlocks && Number(txConf.skipBlocks) > 0) {
+                    spinner.text = `Advancing blocks by ${txConf.skipBlocks}...`;
+                    await simulator.advanceBlocks(Number(txConf.skipBlocks));
+                }
+
+                spinner.text = `Executing transaction ${i + 1}/${txsToRun.length}...`;
+                const simTxHash = await simulator.simulateTransaction({
+                    from: fromAddress, to: txTo, data: txData, value: BigInt(txConf.value || '0'),
+                });
+
+                const parsed = await parser.parseReceipt(simTxHash);
+                const rawTrace = await simulator.traceTransaction(simTxHash);
+                const trace = await parser.parseTrace(rawTrace);
+                const rawStateDiff = await simulator.traceStateDiff(simTxHash);
+                const { stateChanges, balanceLoss } = parser.parseStateDiff(rawStateDiff, fromAddress);
+
+                parsed.stateChanges = stateChanges;
+                parsed.balanceLoss = balanceLoss;
+
+                const traceWarns = trace?.suspiciousOps.map(op => `🔴 Suspicious opcode: ${op}`) || [];
+                let realEthLoss = (balanceLoss?.amount || BigInt(0)) - (parsed.gasFee || BigInt(0));
+                if (realEthLoss < BigInt(0)) realEthLoss = BigInt(0);
+
+                let expectedValue = BigInt(txConf.value || '0');
+                if (realEthLoss > BigInt(0) && expectedValue === BigInt(0)) {
+                    traceWarns.push(`🚨 UNEXPECTED BALANCE DRAIN (Step ${i + 1}): Lost ${formatEther(realEthLoss)} ETH!`);
+                } else if (realEthLoss > expectedValue) {
+                    traceWarns.push(`🚨 UNEXPECTED BALANCE DRAIN (Step ${i + 1}): Lost ${formatEther(realEthLoss)} ETH!`);
+                }
+
+                if (parsed.tokenLosses && parsed.tokenLosses.length > 0) {
+                    parsed.tokenLosses.forEach(loss => {
+                        traceWarns.push(`🚨 UNEXPECTED ERC20/NFT DRAIN (Step ${i + 1}): Lost ${loss.formatted} of ${loss.tokenAddress}!`);
+                    });
+                }
+
+                bundleWarnings = bundleWarnings.concat(parsed.warnings || []);
+                bundleWarnings = bundleWarnings.concat(traceWarns);
+
+                if (i === txsToRun.length - 1) {
+                    finalParsed = parsed;
+                    finalTrace = trace;
+                    spinner.succeed(`Simulated ${txsToRun.length} tx(s). Final tx: ${simTxHash}`);
                 }
             }
 
-            spinner.start('Executing transaction on local fork...');
-            const simTxHash = await simulator.simulateTransaction({
-                from: fromAddress, to: toAddress, data: calldata, value: BigInt(options.value),
-            });
-            spinner.succeed(chalk.cyan(`Simulated tx: ${simTxHash}`));
-
-            spinner.start('Extracting EVM trace and state diff from local Anvil...');
-            const parsed = await parser.parseReceipt(simTxHash);
-
-            const rawTrace = await simulator.traceTransaction(simTxHash);
-            const trace = await parser.parseTrace(rawTrace);
-
-            const rawStateDiff = await simulator.traceStateDiff(simTxHash);
-            const { stateChanges, balanceLoss } = parser.parseStateDiff(rawStateDiff, fromAddress);
-            parsed.stateChanges = stateChanges;
-            parsed.balanceLoss = balanceLoss;
-
-            const traceWarns = trace?.suspiciousOps.map(op => `🔴 Suspicious opcode: ${op}`) || [];
-
-            let realEthLoss = (balanceLoss?.amount || BigInt(0)) - (parsed.gasFee || BigInt(0));
-            if (realEthLoss < BigInt(0)) realEthLoss = BigInt(0);
-
-            let expectedValue = BigInt(options.value || '0');
-
-            if (realEthLoss > BigInt(0) && expectedValue === BigInt(0)) {
-                traceWarns.push(`🚨 UNEXPECTED BALANCE DRAIN: Lost ${formatEther(realEthLoss)} ETH to contract (Gas excluded)!`);
-            } else if (realEthLoss > expectedValue) {
-                traceWarns.push(`🚨 UNEXPECTED BALANCE DRAIN: Lost ${formatEther(realEthLoss)} ETH (Only intended to send ${formatEther(expectedValue)} ETH)!`);
-            }
-
-            if (parsed.tokenLosses && parsed.tokenLosses.length > 0) {
-                parsed.tokenLosses.forEach(loss => {
-                    traceWarns.push(`🚨 UNEXPECTED ERC20 DRAIN: Lost ${loss.formatted} unit(s) of Token ${loss.tokenAddress}!`);
-                });
-            }
-
-            const allWarnings = [...(parsed.warnings || []), ...traceWarns];
+            const allWarnings = bundleWarnings;
+            const parsed = finalParsed;
+            const trace = finalTrace;
+            const stateChanges = parsed.stateChanges || [];
             spinner.succeed(`Trace & Diff done — ${(parsed.logs || []).length} events, ${stateChanges.length} state updates`);
 
             console.log(chalk.gray('\n[SIMULATION RESULT]'));
             console.log(`  Status   : ${parsed.status === 'success' ? chalk.green('SUCCESS') : chalk.red('REVERTED')}`);
             console.log(`  Gas Used : ${chalk.white(parsed.gasUsed)}`);
-            if (parsed.logs?.length) {
+            if (parsed?.logs?.length) {
                 console.log(chalk.cyan('\n  [Events]'));
-                parsed.logs.forEach(log => {
+                parsed.logs.forEach((log: any) => {
                     console.log(chalk.gray(`    • ${log.eventName} @ ${log.address}`));
                     if (log.decoded) Object.entries(log.decoded).forEach(([k, v]) =>
                         console.log(chalk.gray(`      ${k}: ${v}`)));
