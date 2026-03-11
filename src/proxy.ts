@@ -110,6 +110,7 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
     console.log(chalk.cyan(`  Waiting for transactions...\n`));
 
     const server = http.createServer(async (req, res) => {
+        let walletConnected = false;
         // Add CORS headers so browser-based wallets (Phantom/MetaMask extensions) don't block requests
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -133,8 +134,20 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
             try {
                 const payload = JSON.parse(body);
 
+                if (!walletConnected && payload.method) {
+                    console.log(chalk.green(`\n  🔗 Wallet Connected Successfully!`));
+                    console.log(chalk.gray(`     (Method: ${payload.method})`));
+                    console.log(chalk.dim(`     SKEP3 is now actively protecting and analyzing network traffic in stealth mode.\n`));
+                    walletConnected = true;
+                }
+
                 // If it's a batch of RPC calls, SKEP3 firewall skips batch processing complexity for now and just forwards
                 if (Array.isArray(payload)) {
+                    if (!walletConnected && payload.length > 0 && payload[0].method) {
+                        console.log(chalk.green(`\n  🔗 Wallet Connected Successfully! (Batch Mode)`));
+                        console.log(chalk.dim(`     SKEP3 is now actively protecting and analyzing network traffic in stealth mode.\n`));
+                        walletConnected = true;
+                    }
                     const response = await forwardRequest(targetRpc, body);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(response);
