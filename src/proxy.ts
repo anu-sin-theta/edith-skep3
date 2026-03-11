@@ -110,6 +110,17 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
     console.log(chalk.cyan(`  Waiting for transactions...\n`));
 
     const server = http.createServer(async (req, res) => {
+        // Add CORS headers so browser-based wallets (Phantom/MetaMask extensions) don't block requests
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+
         if (req.method !== 'POST') {
             res.writeHead(405);
             res.end('Method Not Allowed');
