@@ -726,7 +726,7 @@ program
     edith proxy --rpc https://ethereum.publicnode.com
     edith proxy --rpc https://eth.llamarpc.com --port 9545
   `)
-    .requiredOption('--rpc <url>', 'The true remote RPC provider URL SKEP3 will forward traffic to')
+    .option('--rpc <url>', 'The true remote RPC provider URL SKEP3 will forward traffic to')
     .option('--port <number>', 'Local port to listen on', '9545')
     .action(async (options) => {
         await checkAndInstallDependencies();

@@ -6,7 +6,7 @@ import { parseTransaction, type Hex } from 'viem';
 import { AnvilSimulator, DEFAULT_FORK_RPC } from './simulator.js';
 import { SecurityAuditor } from './ai.js';
 import { TransactionParser } from './parser.js';
-import { confirm } from '@inquirer/prompts';
+import { confirm, select, input } from '@inquirer/prompts';
 import { loadConfig, getOllamaStatus, PROVIDERS, type Provider } from './brain.js';
 
 function forwardRequest(targetUrl: string, body: string): Promise<string> {
@@ -37,7 +37,36 @@ function forwardRequest(targetUrl: string, body: string): Promise<string> {
     });
 }
 
-export async function startProxyServer(targetRpc: string, port: number = 9545) {
+export const NETWORKS = [
+    { name: 'Ethereum Mainnet', value: 'https://ethereum.publicnode.com', type: 'evm' },
+    { name: 'Solana Mainnet', value: 'https://api.mainnet-beta.solana.com', type: 'solana' },
+    { name: 'Base', value: 'https://base.publicnode.com', type: 'evm' },
+    { name: 'Arbitrum One', value: 'https://arbitrum.publicnode.com', type: 'evm' },
+    { name: 'Polygon', value: 'https://polygon.publicnode.com', type: 'evm' },
+    { name: 'Binance Smart Chain', value: 'https://bsc.publicnode.com', type: 'evm' },
+    { name: 'Custom RPC', value: 'custom', type: 'custom' }
+];
+
+export async function startProxyServer(passedRpc: string | undefined, port: number = 9545) {
+    let targetRpc = passedRpc;
+
+    if (!targetRpc) {
+        console.log(chalk.bold.hex('#00FFAA')(`\n  SKEP3 Proxy Configuration\n`));
+
+        targetRpc = await select({
+            message: 'Select the network you want to proxy and protect:',
+            choices: NETWORKS.map(n => ({ name: n.name, value: n.value }))
+        });
+
+        if (targetRpc === 'custom') {
+            targetRpc = await input({
+                message: 'Enter your Custom RPC URL (e.g., https://mainnet.infura.io/v3/...): ',
+                validate: (val) => val.startsWith('http') ? true : 'Please enter a valid HTTP/HTTPS URL'
+            });
+        }
+        console.log('');
+    }
+
     const config = loadConfig();
     const isOllamaRunning = await getOllamaStatus();
 
