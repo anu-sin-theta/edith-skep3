@@ -1,0 +1,189 @@
+import http from 'http';
+import https from 'https';
+import chalk from 'chalk';
+import ora from 'ora';
+import { parseTransaction, type Hex } from 'viem';
+import { AnvilSimulator, DEFAULT_FORK_RPC } from './simulator.js';
+import { SecurityAuditor } from './ai.js';
+import { TransactionParser } from './parser.js';
+import { confirm } from '@inquirer/prompts';
+import { loadConfig, getOllamaStatus, PROVIDERS, type Provider } from './brain.js';
+
+function forwardRequest(targetUrl: string, body: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const parsedUrl = new URL(targetUrl);
+        const requestModule = parsedUrl.protocol === 'https:' ? https : http;
+
+        const options = {
+            hostname: parsedUrl.hostname,
+            path: parsedUrl.pathname + parsedUrl.search,
+            port: parsedUrl.port,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body)
+            }
+        };
+
+        const req = requestModule.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => resolve(data));
+        });
+
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+export async function startProxyServer(targetRpc: string, port: number = 9545) {
+    const config = loadConfig();
+    const isOllamaRunning = await getOllamaStatus();
+
+    let aiMode: 'ollama' | 'remote' = 'ollama';
+    let providerName: Provider | undefined = undefined;
+    let apiKey = '';
+    let ollamaModel = '';
+    let remoteModel = '';
+
+    if (config?.provider === 'ollama') {
+        aiMode = 'ollama';
+        ollamaModel = config.model;
+    } else if (config) {
+        aiMode = 'remote';
+        providerName = PROVIDERS[config.provider];
+        apiKey = process.env[providerName?.envKey || ''] || '';
+        remoteModel = config.model;
+    } else if (isOllamaRunning.running && isOllamaRunning.models.length > 0) {
+        aiMode = 'ollama';
+        ollamaModel = isOllamaRunning.models[0];
+    }
+
+    // Same AI setup as index.ts
+    const auditor = new SecurityAuditor(aiMode, {
+        ollamaModel,
+        provider: providerName,
+        apiKey,
+        remoteModel
+    });
+
+    console.log(chalk.bold.hex('#00FFAA')(`
+  ╔══════════════════════════════════════════════════════╗
+    🛡️  EDITH SKEP3  ·  Transaction Firewall Proxy        
+  ╠══════════════════════════════════════════════════════╣
+    Listening on : http://127.0.0.1:${port}
+    Target Node  : ${targetRpc}
+    AI Engine    : ${auditor.engine}
+  ╚══════════════════════════════════════════════════════╝
+    `));
+    console.log(chalk.gray(`  Point your wallet's Custom RPC Network to http://127.0.0.1:${port}`));
+    console.log(chalk.cyan(`  Waiting for transactions...\n`));
+
+    const server = http.createServer(async (req, res) => {
+        if (req.method !== 'POST') {
+            res.writeHead(405);
+            res.end('Method Not Allowed');
+            return;
+        }
+
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const payload = JSON.parse(body);
+
+                // If it's a batch of RPC calls, SKEP3 firewall skips batch processing complexity for now and just forwards
+                if (Array.isArray(payload)) {
+                    const response = await forwardRequest(targetRpc, body);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(response);
+                    return;
+                }
+
+                if (payload.method === 'eth_sendRawTransaction') {
+                    const rawTx = payload.params[0] as Hex;
+                    console.log(chalk.yellow(`\n  [INTERCEPTED] eth_sendRawTransaction`));
+
+                    const spinner = ora('Decoding transaction...').start();
+                    const tx = parseTransaction(rawTx);
+                    spinner.succeed(`Decoded tx to ${tx.to}`);
+
+                    let simStatus = 'SUCCESS';
+                    let isThreat = false;
+                    try {
+                        spinner.start('Forking and simulating transaction locally...');
+                        const simulator = new AnvilSimulator(targetRpc);
+                        await simulator.startFork();
+
+                        // Default to standard test user if recovery fails or isn't present
+                        const sender = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as Hex;
+                        await simulator.impersonateAccount(sender);
+                        await simulator.setBalance(sender);
+
+                        const simTxHash = await simulator.simulateTransaction({
+                            from: sender,
+                            to: tx.to as Hex,
+                            value: tx.value || 0n,
+                            data: tx.data || '0x',
+                        });
+
+                        const parser = new TransactionParser();
+                        const parsed = await parser.parseReceipt(simTxHash);
+                        const rawTrace = await simulator.traceTransaction(simTxHash);
+                        const trace = await parser.parseTrace(rawTrace);
+                        const rawStateDiff = await simulator.traceStateDiff(simTxHash);
+                        const { stateChanges, balanceLoss } = parser.parseStateDiff(rawStateDiff, sender);
+
+                        parsed.stateChanges = stateChanges;
+                        parsed.balanceLoss = balanceLoss;
+
+                        await simulator.stop();
+                        spinner.succeed(`Simulation finished (${parsed.gasUsed} gas)`);
+
+                        // Run AI Audit
+                        spinner.start(`Analyzing threat vectors via ${auditor.engine}...`);
+                        const reportStr = parser.formatForAI(parsed, trace, undefined);
+                        const audit = await auditor.audit(reportStr);
+                        spinner.stop();
+
+                        isThreat = audit.verdict === 'CRITICAL' || audit.verdict === 'RISKY';
+                        console.log(isThreat ? chalk.bold.red(`\n  🚨 VERDICT: ${audit.verdict}`) : chalk.bold.green(`\n  ✅ VERDICT: ${audit.verdict}`));
+                        console.log(`  ${chalk.white(audit.reasoning)}\n`);
+
+                    } catch (err: any) {
+                        spinner.fail(`Simulation Failed: ${err.message}`);
+                        simStatus = 'FAILED';
+                    }
+
+                    const proceed = await confirm({ message: 'Do you want to broadcast this transaction to the network?', default: false });
+
+                    if (!proceed) {
+                        console.log(chalk.red('  ✖ Transaction blocked by user.'));
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ jsonrpc: '2.0', id: payload.id, error: { code: -32000, message: 'Transaction blocked by SKEP3 Firewall' } }));
+                        return;
+                    }
+
+                    console.log(chalk.green('  ✔ Releasing transaction to true RPC...'));
+                }
+
+                // Forward request
+                const response = await forwardRequest(targetRpc, body);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(response);
+            } catch (err) {
+                res.writeHead(500);
+                res.end('Proxy Error');
+            }
+        });
+    });
+
+    server.listen(port, '127.0.0.1');
+
+    process.on('SIGINT', () => {
+        console.log(chalk.gray('\n  Shutting down SKEP3 Proxy...'));
+        server.close();
+        process.exit(0);
+    });
+}

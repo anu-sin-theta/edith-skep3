@@ -24,6 +24,7 @@ import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { ContractExplorer } from './explorer.js';
 import { checkAndInstallDependencies } from './installer.js';
+import { startProxyServer } from './proxy.js';
 
 const EVM_PUBLIC_RPCS = [
     'https://ethereum.publicnode.com',
@@ -149,15 +150,15 @@ function printSplash() {
     console.log(chalk.gray('                                v2.4 | anubhav singh | https://anufied.me\n'));
 
     console.log(chalk.white('  USAGE\n'));
-    console.log(chalk.cyan('    edith scan') + chalk.gray(' <contract|txhash>   ') + chalk.white('Simulate and audit a transaction'));
-    console.log(chalk.cyan('    edith brain') + chalk.gray('                     ') + chalk.white('Configure AI provider (Gemini, OpenAI, Mistral, Claude)'));
-    console.log(chalk.cyan('    edith test-ai') + chalk.gray('                   ') + chalk.white('Verify AI connection with a mock scan'));
-    console.log(chalk.cyan('    edith --help') + chalk.gray('                    ') + chalk.white('Show full help\n'));
+    console.log(chalk.cyan('    edith scan <hash>  ') + chalk.gray('                  ') + chalk.white('Simulate and audit a transaction'));
+    console.log(chalk.cyan('    edith proxy --rpc <url>') + chalk.gray('              ') + chalk.white('Start local proxy server for wallets'));
+    console.log(chalk.cyan('    edith brain') + chalk.gray('                          ') + chalk.white('Configure AI provider'));
+    console.log(chalk.cyan('    edith test-ai') + chalk.gray('                        ') + chalk.white('Verify AI connection with a mock scan'));
+    console.log(chalk.cyan('    edith --help') + chalk.gray('                         ') + chalk.white('Show full help\n'));
 
     console.log(chalk.white('  EXAMPLES\n'));
-    console.log(chalk.gray('    edith scan 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --method "approve(address,uint256)"'));
     console.log(chalk.gray('    edith scan 0xTxHash --brain'));
-    console.log(chalk.gray('    edith brain --status\n'));
+    console.log(chalk.gray('    edith proxy --rpc https://ethereum.publicnode.com\n'));
 }
 
 // ─── CLI Setup ────────────────────────────────────────────────────────────────
@@ -709,6 +710,27 @@ Value: 0.0 ETH  |  Status: SUCCESS  |  Gas: 46000
         console.log(chalk.white('  Reason  :'), result.reasoning);
         console.log(chalk.gray('  Engine  :'), result.engine);
         console.log('');
+    });
+
+// ════════════════════════════════════════════════════════════════════════════════
+// COMMAND: edith proxy
+// ════════════════════════════════════════════════════════════════════════════════
+program
+    .command('proxy')
+    .summary('Start local proxy server to intercept wallet transactions')
+    .description(`
+  Launch an HTTP proxy server that listens for incoming JSON-RPC traffic.
+  Point MetaMask or Phantom to this local RPC URL to protect your wallet automatically.
+
+  EXAMPLES:
+    edith proxy --rpc https://ethereum.publicnode.com
+    edith proxy --rpc https://eth.llamarpc.com --port 9545
+  `)
+    .requiredOption('--rpc <url>', 'The true remote RPC provider URL SKEP3 will forward traffic to')
+    .option('--port <number>', 'Local port to listen on', '9545')
+    .action(async (options) => {
+        await checkAndInstallDependencies();
+        await startProxyServer(options.rpc, parseInt(options.port, 10));
     });
 
 program.parse();
