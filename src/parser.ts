@@ -76,7 +76,8 @@ export class TransactionParser {
 
         const tokenLosses: { tokenAddress: string; amount: string; formatted: string }[] = [];
 
-        const logs = receipt.logs.map((log): ParsedLog => {
+        const logs: ParsedLog[] = [];
+        for (const log of receipt.logs) {
             const topic0 = log.topics[0];
             const eventName = topic0 ? (KNOWN_TOPICS[topic0] || `Unknown(${topic0.slice(0, 10)}...)`) : 'Unknown';
 
@@ -102,12 +103,28 @@ export class TransactionParser {
 
                     // Track if the sender is losing ERC20 tokens
                     if (from.toLowerCase() === tx.from.toLowerCase()) {
-                        let decimals = 18; // fallback
-                        // A quick heuristic for USDC/USDT which have 6 decimals
-                        if (log.address.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' ||
-                            log.address.toLowerCase() === '0xdac17f958d2ee523a2206206994597c13d831ec7') {
-                            decimals = 6;
+                        // DETECTOR: Dynamic decimal resolution
+                        let decimals = 18;
+
+                        try {
+                            // Attempt to fetch decimals dynamically from the contract
+                            const d = await this.client.readContract({
+                                address: log.address as Hex,
+                                abi: [{ name: 'decimals', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] }],
+                                functionName: 'decimals',
+                            });
+                            decimals = Number(d);
+                        } catch (e) {
+                            // Fallback heuristic for common 6-decimal tokens if RPC/Contract fails
+                            const isSixDecimal = [
+                                '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // USDC
+                                '0xdac17f958d2ee523a2206206994597c13d831ec7', // USDT
+                                '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174', // Polygon USDC
+                                '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', // Polygon USDT
+                            ].includes(log.address.toLowerCase());
+                            if (isSixDecimal) decimals = 6;
                         }
+
                         tokenLosses.push({
                             tokenAddress: log.address,
                             amount: amount.toString(),
@@ -163,13 +180,13 @@ export class TransactionParser {
                 }
             }
 
-            return {
+            logs.push({
                 address: log.address,
                 eventName,
                 raw: log.data,
                 decoded,
-            };
-        });
+            });
+        }
 
         const warnings: string[] = this.detectWarningsFromLogs(logs, tx.from);
 

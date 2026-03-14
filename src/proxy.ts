@@ -2,7 +2,7 @@ import http from 'http';
 import https from 'https';
 import chalk from 'chalk';
 import ora from 'ora';
-import { parseTransaction, type Hex } from 'viem';
+import { parseTransaction, type Hex, recoverTransactionAddress } from 'viem';
 import { AnvilSimulator, DEFAULT_FORK_RPC } from './simulator.js';
 import { SecurityAuditor } from './ai.js';
 import { TransactionParser } from './parser.js';
@@ -101,11 +101,11 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
   ╔══════════════════════════════════════════════════════╗
     🛡️  EDITH SKEP3  ·  Transaction Firewall Proxy        
   ╠══════════════════════════════════════════════════════╣
-    Listening on : http://127.0.0.1:${port}
-    Target Node  : ${targetRpc}
-    AI Engine    : ${auditor.engine}
+    Listening on: http://127.0.0.1:${port}
+    Target Node: ${targetRpc}
+    AI Engine: ${auditor.engine}
   ╚══════════════════════════════════════════════════════╝
-    `));
+`));
     console.log(chalk.gray(`  Point your wallet's Custom RPC Network to http://127.0.0.1:${port}`));
     console.log(chalk.cyan(`  Waiting for transactions...\n`));
 
@@ -160,7 +160,17 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
 
                     const spinner = ora('Decoding transaction...').start();
                     const tx = parseTransaction(rawTx);
-                    spinner.succeed(`Decoded tx to ${tx.to}`);
+
+                    // Robust Sender Recovery
+                    let sender: Hex | undefined;
+                    try {
+                        // Cast to any to satisfy specific TransactionSerializedLegacy | ... mapping in viem
+                        sender = await recoverTransactionAddress({ serializedTransaction: rawTx as any });
+                    } catch (e) {
+                        spinner.warn("Could not recover sender address automatically. Using public key recovery fallback...");
+                    }
+
+                    spinner.succeed(`Decoded tx to ${tx.to} | From: ${sender || 'Unknown'}`);
 
                     let simStatus = 'SUCCESS';
                     let isThreat = false;
@@ -169,8 +179,8 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
                         const simulator = new AnvilSimulator(targetRpc);
                         await simulator.startFork();
 
-                        // Default to standard test user if recovery fails or isn't present
-                        const sender = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as Hex;
+                        if (!sender) throw new Error("Could not recover sender address. Simulation requires a valid 'from' address.");
+
                         await simulator.impersonateAccount(sender);
                         await simulator.setBalance(sender);
 

@@ -100,23 +100,28 @@ export class ContractExplorer {
     private analyzeBytecode(bytecode: string): { isSuspicious: boolean, type?: string, warning?: string } {
         const hex = bytecode.toLowerCase();
 
-        const hasXOR = (hex.match(/18/g) || []).length > 2;
+        // 🛡️ REFINED HEURISTICS: Look for actual obfuscation loops
+        // XOR (18) followed closely by MSTORE (52) or MSTORE8 (53)
+        // This pattern is typical for "EtherHiding" or "Seaport-variant" drainers unpacking their payload.
+        const hasXORLoop = /18.{0,10}(52|53)/g.test(hex);
+
         const hasDelegateCall = hex.includes('f4');
         const hasSelfDestruct = hex.includes('ff');
         const hasAddrMask = hex.includes('ffffffffffffffffffffffffffffffffffffffff');
 
-        const score = (hasXOR ? 2 : 0) + (hasDelegateCall ? 3 : 0) + (hasSelfDestruct ? 5 : 0) + (hasAddrMask ? 2 : 0);
+        // Weighted scoring system
+        const score = (hasXORLoop ? 4 : 0) + (hasDelegateCall ? 3 : 0) + (hasSelfDestruct ? 5 : 0) + (hasAddrMask ? 2 : 0);
 
-        if (score >= 4 || (hasXOR && hex.length > 5000)) {
+        if (score >= 5 || (hasXORLoop && hex.length > 3000)) {
             return {
                 isSuspicious: true,
                 type: 'Malicious Signature',
                 warning: `// !!! SECURITY ALERT: MALICIOUS PATTERN DETECTED !!!
 // Pattern: Suspicious Bytecode Score (${score}/10)
-// Evidence: ${hasXOR ? 'XOR-based obfuscation opcodes detected. ' : ''}${hasDelegateCall ? 'Hidden proxy delegation (DELEGATECALL). ' : ''}
+// Evidence: ${hasXORLoop ? 'XOR-based obfuscation/unpacking loop detected. ' : ''}${hasDelegateCall ? 'Hidden proxy delegation (DELEGATECALL). ' : ''}
 //
-// Risk: This contract uses low-level opcodes (XOR/Delegate) often associated with 
-//       EtherHiding campaigns or drainers. Proceed with extreme caution.`
+// Risk: This contract uses obfuscation patterns or low-level opcodes (XOR-Loop/Delegate) 
+//       highly characteristic of modern asset drainers. Proceed with extreme caution.`
             };
         }
 
