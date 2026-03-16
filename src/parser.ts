@@ -204,17 +204,22 @@ export class TransactionParser {
         };
     }
 
-    async parseTrace(rawTrace: any): Promise<ParsedTrace | null> {
-        if (!rawTrace) return null;
+    async parseTrace(rawTrace: any): Promise<{ trace: ParsedTrace | null, warnings: string[] }> {
+        if (!rawTrace) return { trace: null, warnings: [] };
 
-        const suspiciousOps: string[] = [];
+        const allSuspiciousOps: string[] = [];
         const callStack = new Set<string>();
 
         const extractSuspicious = async (traceNode: any, parentTraceNode?: any): Promise<ParsedTrace> => {
             const nodeTo = traceNode.to?.toLowerCase() || '';
+            const nodeFrom = traceNode.from?.toLowerCase() || '';
+
+            // Reentrancy Detection: If an address is already in the call stack and appearing again
             if (nodeTo && callStack.has(nodeTo)) {
-                suspiciousOps.push(`REENTRANCY LOOP detected at ${traceNode.to}`);
+                const warn = `🚨 REENTRANCY LOOP detected at ${nodeTo}!`;
+                if (!allSuspiciousOps.includes(warn)) allSuspiciousOps.push(warn);
             }
+
             if (nodeTo) {
                 callStack.add(nodeTo);
             }
@@ -227,26 +232,29 @@ export class TransactionParser {
             }
 
             // Check for suspicious opcodes
+            const nodeSuspicious: string[] = [];
             if (traceNode.type) {
                 const typeUpper = traceNode.type.toUpperCase();
                 if (SUSPICIOUS_OPCODES.includes(typeUpper)) {
                     if (typeUpper === 'DELEGATECALL') {
-                        // Avoid false positives on standard forwarding proxies
                         const isStandardProxy = parentTraceNode &&
                             parentTraceNode.input === traceNode.input &&
                             parentTraceNode.type !== 'DELEGATECALL';
                         if (!isStandardProxy) {
-                            suspiciousOps.push(`${traceNode.type} to ${traceNode.to}`);
+                            const opWarn = `${traceNode.type} to ${traceNode.to}`;
+                            nodeSuspicious.push(opWarn);
+                            if (!allSuspiciousOps.includes(opWarn)) allSuspiciousOps.push(opWarn);
                         }
                     } else {
-                        suspiciousOps.push(`${traceNode.type} to ${traceNode.to}`);
+                        const opWarn = `${traceNode.type} to ${traceNode.to}`;
+                        nodeSuspicious.push(opWarn);
+                        if (!allSuspiciousOps.includes(opWarn)) allSuspiciousOps.push(opWarn);
                     }
                 }
             }
 
             let decodedInput = `Raw: ${(traceNode.input || '0x').slice(0, 512)}...`;
 
-            // Auto decoding using 4byte directory
             if (traceNode.input && traceNode.input.length >= 10 && traceNode.input !== '0x') {
                 const selector = traceNode.input.slice(0, 10);
                 if (!this.signatureCache[selector]) {
@@ -271,11 +279,12 @@ export class TransactionParser {
                 input: decodedInput,
                 output: (traceNode.output || '0x').slice(0, 512),
                 calls: calls.length > 0 ? calls : undefined,
-                suspiciousOps,
+                suspiciousOps: nodeSuspicious,
             };
         };
 
-        return await extractSuspicious(rawTrace, null);
+        const trace = await extractSuspicious(rawTrace, null);
+        return { trace, warnings: allSuspiciousOps };
     }
 
     parseStateDiff(rawDiff: any, impersonatedAddress: string): { stateChanges: StateChange[], balanceLoss?: { amount: bigint, formatted: string } } {

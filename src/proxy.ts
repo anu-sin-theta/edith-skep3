@@ -154,6 +154,43 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
                     return;
                 }
 
+                if (payload.method === 'eth_signTypedData_v4') {
+                    const [_address, dataStr] = payload.params;
+                    const data = JSON.parse(dataStr);
+                    console.log(chalk.yellow(`\n  [INTERCEPTED] eth_signTypedData_v4 (EIP-712)`));
+
+                    const spinner = ora('Analyzing EIP-712 off-chain signature request...').start();
+
+                    const reportStr = `
+=== EIP-712 SIGNATURE REQUEST ===
+Method: eth_signTypedData_v4 (Off-chain Signing)
+Domain: ${JSON.stringify(data.domain, null, 2)}
+Types: ${JSON.stringify(data.types, null, 2)}
+Message: ${JSON.stringify(data.message, null, 2)}
+
+Security Context:
+- Many modern drainers (Permit/Permit2) use off-chain signatures to gain approval for assets without a transaction.
+- Check if the 'spender' or 'operator' in the message is a known malicious address.
+- Check if the domain name looks like a legitimate protocol or a phishing clone.
+`.trim();
+
+                    const audit = await auditor.audit(reportStr);
+                    spinner.stop();
+
+                    const isThreat = audit.verdict === 'CRITICAL' || audit.verdict === 'RISKY';
+                    console.log(isThreat ? chalk.bold.red(`\n  🚨 VERDICT: ${audit.verdict}`) : chalk.bold.green(`\n  ✅ VERDICT: ${audit.verdict}`));
+                    console.log(`  ${chalk.white(audit.reasoning)}\n`);
+
+                    const proceed = await confirm({ message: 'Do you want to sign this message?', default: false });
+                    if (!proceed) {
+                        console.log(chalk.red('  ✖ Signature blocked by user.'));
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ jsonrpc: '2.0', id: payload.id, error: { code: -32000, message: 'Signature blocked by SKEP3 Firewall' } }));
+                        return;
+                    }
+                    console.log(chalk.green('  ✔ Releasing signature request...'));
+                }
+
                 if (payload.method === 'eth_sendRawTransaction') {
                     const rawTx = payload.params[0] as Hex;
                     console.log(chalk.yellow(`\n  [INTERCEPTED] eth_sendRawTransaction`));
@@ -164,10 +201,9 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
                     // Robust Sender Recovery
                     let sender: Hex | undefined;
                     try {
-                        // Cast to any to satisfy specific TransactionSerializedLegacy | ... mapping in viem
                         sender = await recoverTransactionAddress({ serializedTransaction: rawTx as any });
                     } catch (e) {
-                        spinner.warn("Could not recover sender address automatically. Using public key recovery fallback...");
+                        spinner.warn("Could not recover sender address automatically fallback...");
                     }
 
                     spinner.succeed(`Decoded tx to ${tx.to} | From: ${sender || 'Unknown'}`);
@@ -179,7 +215,7 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
                         const simulator = new AnvilSimulator(targetRpc);
                         await simulator.startFork();
 
-                        if (!sender) throw new Error("Could not recover sender address. Simulation requires a valid 'from' address.");
+                        if (!sender) throw new Error("Could not recover sender address.");
 
                         await simulator.impersonateAccount(sender);
                         await simulator.setBalance(sender);
@@ -194,12 +230,13 @@ export async function startProxyServer(passedRpc: string | undefined, port: numb
                         const parser = new TransactionParser();
                         const parsed = await parser.parseReceipt(simTxHash);
                         const rawTrace = await simulator.traceTransaction(simTxHash);
-                        const trace = await parser.parseTrace(rawTrace);
+                        const { trace, warnings: traceWarnings } = await parser.parseTrace(rawTrace);
                         const rawStateDiff = await simulator.traceStateDiff(simTxHash);
                         const { stateChanges, balanceLoss } = parser.parseStateDiff(rawStateDiff, sender);
 
                         parsed.stateChanges = stateChanges;
                         parsed.balanceLoss = balanceLoss;
+                        parsed.warnings = (parsed.warnings || []).concat(traceWarnings || []);
 
                         await simulator.stop();
                         spinner.succeed(`Simulation finished (${parsed.gasUsed} gas)`);

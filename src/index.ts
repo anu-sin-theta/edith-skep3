@@ -23,6 +23,7 @@ import { type Hex, formatEther } from 'viem';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 import { ContractExplorer } from './explorer.js';
+import { syncThreats } from './intel.js';
 import { checkAndInstallDependencies } from './installer.js';
 import { startProxyServer } from './proxy.js';
 
@@ -147,7 +148,7 @@ function printSplash() {
     ].join('\n')));
 
     console.log(chalk.gray('  Privacy-First  ·  Local EVM Fork  ·  Advanced Security Analysis'));
-    console.log(chalk.gray('                                v2.4 | anubhav singh | https://anufied.me\n'));
+    console.log(chalk.gray(`                                v${version} | anubhav singh | https://anufied.me\n`));
 
     console.log(chalk.white('  USAGE\n'));
     console.log(chalk.cyan('    edith scan <hash>  ') + chalk.gray('                  ') + chalk.white('Simulate and audit a transaction'));
@@ -508,14 +509,17 @@ program
 
                 const parsed = await parser.parseReceipt(simTxHash);
                 const rawTrace = await simulator.traceTransaction(simTxHash);
-                const trace = await parser.parseTrace(rawTrace);
+                const { trace, warnings: traceWarnings } = await parser.parseTrace(rawTrace);
                 const rawStateDiff = await simulator.traceStateDiff(simTxHash);
                 const { stateChanges, balanceLoss } = parser.parseStateDiff(rawStateDiff, fromAddress);
 
                 parsed.stateChanges = stateChanges;
                 parsed.balanceLoss = balanceLoss;
 
-                const traceWarns = trace?.suspiciousOps.map(op => `🔴 Suspicious opcode: ${op}`) || [];
+                const traceWarns = [
+                    ...(traceWarnings || []),
+                    ...(trace?.suspiciousOps?.map((op: string) => `🔴 Suspicious opcode: ${op}`) || [])
+                ];
                 let realEthLoss = (balanceLoss?.amount || BigInt(0)) - (parsed.gasFee || BigInt(0));
                 if (realEthLoss < BigInt(0)) realEthLoss = BigInt(0);
 
@@ -731,6 +735,21 @@ program
     .action(async (options) => {
         await checkAndInstallDependencies();
         await startProxyServer(options.rpc, parseInt(options.port, 10));
+    });
+
+program.command('sync')
+    .description('Sync high-fidelity threat intelligence database from community feeds')
+    .argument('[source]', 'Optional custom source URL to sync from')
+    .action(async (source) => {
+        printSplash();
+        const spinner = ora('Synchronizing threat intelligence database...').start();
+        try {
+            const count = await syncThreats(source);
+            spinner.succeed(chalk.green(`Intel Database Updated! ${count} new malicious vectors indexed.`));
+            console.log(chalk.gray(`  Location: ~/.config/edith-sentinel/threats.json\n`));
+        } catch (err: any) {
+            spinner.fail(chalk.red(`Sync Failed: ${err.message}`));
+        }
     });
 
 program.parse();
